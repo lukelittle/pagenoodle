@@ -177,7 +177,7 @@ export function App() {
         Skip to content
       </a>
       <header class="header">
-        <button class="brand" onClick={() => setState({ mode: 'organize' })} aria-label="Pagenoodle home">
+        <button class="brand" onClick={() => setState({ mode: 'organize' })}>
           <Mascot size={48} wiggle={!!st.busy} />
           <span>
             Pagenoodle

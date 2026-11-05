@@ -62,7 +62,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .btn.danger { color: var(--tomato); }
 .btn.ghost { background: transparent; border-color: transparent; }
 .btn.small { padding: 4px 10px; min-height: 30px; font-size: 13px; }
-.btn[aria-pressed='true'] { background: var(--noodle-2); border-color: var(--noodle); color: #2b1a08; }
+.btn[aria-pressed='true'], .btn[aria-checked='true'] { background: var(--noodle-2); border-color: var(--noodle); color: #2b1a08; }
 .icon { width: 18px; height: 18px; flex: none; }
 
 /* ---------- header ---------- */
@@ -115,7 +115,7 @@ main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .thumb .src-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 4px; }
 .thumb .qa { position: absolute; top: 12px; right: 12px; display: flex; gap: 4px; opacity: 0; transition: opacity 0.1s; }
 .thumb:hover .qa, .thumb:focus-within .qa { opacity: 1; }
-.qa button { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); display: grid; place-items: center; cursor: pointer; padding: 0; }
+.qa .qa-btn { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); display: grid; place-items: center; cursor: pointer; padding: 0; }
 .skeleton { width: 70%; height: 80%; border-radius: 4px; background: linear-gradient(90deg, var(--bg-2), var(--line), var(--bg-2)); background-size: 200% 100%; animation: shimmer 1.2s infinite; }
 @keyframes shimmer { to { background-position: -200% 0; } }
 

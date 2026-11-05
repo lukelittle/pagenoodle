@@ -49,7 +49,7 @@ function StampCard() {
       </div>
       <div class="positions" role="radiogroup" aria-labelledby="pos-lbl">
         {POS.map((p, i) => (
-          <button key={p} class="btn small" role="radio" aria-checked={position === i} aria-pressed={position === i} onClick={() => setPosition(i)}>
+          <button key={p} class="btn small" role="radio" aria-checked={position === i} onClick={() => setPosition(i)}>
             {p}
           </button>
         ))}

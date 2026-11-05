@@ -189,7 +189,7 @@ export function Organize() {
     pointer: number;
   } | null>(null);
   const onPointerDown = (e: PointerEvent, p: PageRef) => {
-    if ((e.target as HTMLElement).closest('button') || e.button !== 0) return;
+    if ((e.target as HTMLElement).closest('button, .qa-btn') || e.button !== 0) return;
     dragState.current = {
       id: p.id,
       x: e.clientX,
@@ -327,21 +327,28 @@ export function Organize() {
                 </span>
                 {p.rot ? <span>{p.rot}°</span> : null}
               </div>
-              <div class="qa">
-                <button
-                  aria-label={`Rotate page ${i + 1}`}
-                  title="Rotate"
-                  onClick={() => setPages(pages.map((x) => (x.id === p.id ? { ...x, rot: (x.rot + 90) % 360 } : x)))}
+              <div class="qa" aria-hidden="true">
+                <span
+                  class="qa-btn"
+                  title="Rotate (R)"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setPages(pages.map((x) => (x.id === p.id ? { ...x, rot: (x.rot + 90) % 360 } : x)));
+                  }}
                 >
                   <Icon name="rotr" />
-                </button>
-                <button
-                  aria-label={`Delete page ${i + 1}`}
-                  title="Delete"
-                  onClick={() => (pages.length > 1 ? setPages(pages.filter((x) => x.id !== p.id)) : toast('A PDF needs at least one page!'))}
+                </span>
+                <span
+                  class="qa-btn"
+                  title="Delete (Del)"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (pages.length > 1) setPages(pages.filter((x) => x.id !== p.id));
+                    else toast('A PDF needs at least one page!');
+                  }}
                 >
                   <Icon name="trash" />
-                </button>
+                </span>
               </div>
             </li>
           );
