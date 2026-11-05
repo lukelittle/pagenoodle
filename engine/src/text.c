@@ -508,6 +508,7 @@ int pn_search_page(pn_doc *doc, int pageidx, const char *needle, int ci, pn_buf 
     walker *w = extract_page(doc, pageidx);
     pagetext pt; memset(&pt, 0, sizeof pt); pn_buf_init(&pt.text);
     build_text(w, &pt);
+    if (!pt.text.len) { pn_buf_free(&pt.text); free(pt.glyph_of); free_walker(w); return 0; }
     /* decode page text to codepoints with glyph mapping */
     int cap = (int)pt.text.len + 1, n = 0;
     unsigned *cp = (unsigned *)malloc(sizeof(unsigned) * (size_t)cap);
