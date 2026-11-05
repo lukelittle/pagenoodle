@@ -188,7 +188,7 @@ export function Recipes() {
             </div>
           )}
           <p class="hint">
-            Stored in {mode === 'opfs' ? 'SQLite on your device (OPFS)' : mode === 'indexeddb' ? 'SQLite, saved to IndexedDB on your device' : mode || '…'} —
+            Stored in {mode === 'opfs' ? 'SQLite on your device (OPFS)' : mode === 'indexeddb' ? 'SQLite, saved to IndexedDB on your device (if Pagenoodle is open in another tab, close it so all tabs share one store)' : mode || '…'} —
             never uploaded.
           </p>
         </section>

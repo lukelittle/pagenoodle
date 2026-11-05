@@ -96,9 +96,16 @@ pn_content *pn_content_parse(const unsigned char *data, size_t len) {
                 else if (dl > 0 && pn_is_ws(s[dl - 1])) dl--;
                 for (int i = 0; i < nargs; i++) pn_drop(args[i]);
                 nargs = 0;
+                /* Renderers (e.g. PDF.js) locate the end heuristically: any "EI" followed by
+                 * whitespace inside our data range could be where *they* stop, turning the rest
+                 * into operators we would never see. Flag it so redaction can fail closed. */
+                int ambiguous = 0;
+                for (const unsigned char *q = s; q + 1 < s + dl; q++)
+                    if (q[0] == 'E' && q[1] == 'I' && (q + 2 >= lx.end || q[2] == ' ' || q[2] == '\n' || q[2] == '\r')) { ambiguous = 1; break; }
                 pn_obj *a1[1] = {dict};
                 push_op(c, "BI", a1, 1);
                 pn_op *op = &c->ops[c->n - 1];
+                op->ambiguous = ambiguous;
                 op->inl = (unsigned char *)malloc(dl + 1);
                 memcpy(op->inl, s, dl);
                 op->inl_len = dl;

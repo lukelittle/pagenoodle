@@ -18,11 +18,21 @@ CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 
 // ---- IndexedDB snapshot fallback ----
 const IDB_NAME = 'pagenoodle';
+let idbConn: IDBDatabase | null = null;
 function idb(): Promise<IDBDatabase> {
+  if (idbConn) return Promise.resolve(idbConn);
   return new Promise((resolve, reject) => {
     const r = indexedDB.open(IDB_NAME, 1);
     r.onupgradeneeded = () => r.result.createObjectStore('kv');
-    r.onsuccess = () => resolve(r.result);
+    r.onsuccess = () => {
+      idbConn = r.result;
+      // let deleteDatabase (wipe, possibly from another tab) proceed instead of blocking forever
+      idbConn.onversionchange = () => {
+        idbConn?.close();
+        idbConn = null;
+      };
+      resolve(idbConn);
+    };
     r.onerror = () => reject(r.error);
   });
 }
@@ -50,7 +60,16 @@ async function persist() {
 }
 
 let baseUrl = '';
-async function init(base: string) {
+let initP: Promise<string> | null = null;
+function init(base: string): Promise<string> {
+  if (!initP)
+    initP = initInner(base).catch((e) => {
+      initP = null;
+      throw e;
+    });
+  return initP;
+}
+async function initInner(base: string) {
   if (db) return mode;
   baseUrl = base;
   const mod = await import(/* @vite-ignore */ new URL('vendor/sqlite/index.mjs', base).href);
@@ -59,28 +78,32 @@ async function init(base: string) {
     const pool = await sqlite3.installOpfsSAHPoolVfs({
       name: 'pagenoodle-pool',
     });
-    db = new pool.OpfsSAHPoolDb('/pagenoodle.sqlite3');
+    const odb = new pool.OpfsSAHPoolDb('/pagenoodle.sqlite3');
+    odb.exec('PRAGMA secure_delete=ON;');
+    odb.exec(SCHEMA);
+    db = odb;
     sahPool = pool;
     mode = 'opfs';
   } catch {
-    db = new sqlite3.oo1.DB(':memory:', 'c');
+    const mem = new sqlite3.oo1.DB(':memory:', 'c');
     mode = 'memory';
     try {
       const snap = await idbGet('db');
       if (snap && snap.length) {
         const p = sqlite3.wasm.allocFromTypedArray(snap);
         const flags = sqlite3.capi.SQLITE_DESERIALIZE_FREEONCLOSE | sqlite3.capi.SQLITE_DESERIALIZE_RESIZEABLE;
-        db.checkRc(sqlite3.capi.sqlite3_deserialize(db.pointer, 'main', p, snap.length, snap.length, flags));
+        mem.checkRc(sqlite3.capi.sqlite3_deserialize(mem.pointer, 'main', p, snap.length, snap.length, flags));
       }
       mode = 'indexeddb';
     } catch {
       mode = 'memory';
     }
+    // Deleted rows are overwritten with zeros, and the file is compacted after deletes, so removed
+    // signatures/recipes don't linger in free pages on disk.
+    mem.exec('PRAGMA secure_delete=ON;');
+    mem.exec(SCHEMA);
+    db = mem; // publish only once fully ready
   }
-  // Deleted rows are overwritten with zeros, and the file is compacted after deletes, so removed
-  // signatures/recipes don't linger in free pages on disk.
-  db.exec('PRAGMA secure_delete=ON;');
-  db.exec(SCHEMA);
   return mode;
 }
 
@@ -134,40 +157,51 @@ const methods: Record<string, (...a: any[]) => unknown> = {
     });
     await persist();
   },
-  async wipe() {
-    // Remove the storage itself, not just the rows: close the database, delete the OPFS pool
-    // (all its files) and the IndexedDB snapshot, then start again empty.
-    db.exec('DELETE FROM recipes; DELETE FROM signatures; DELETE FROM settings;');
-    compact();
-    db.close();
-    db = null;
-    try {
-      if (sahPool) await sahPool.removeVfs();
-    } catch {
-      /* ignore */
-    }
-    try {
-      const root = await navigator.storage.getDirectory();
-      for await (const name of (root as unknown as { keys(): AsyncIterable<string> }).keys()) {
-        if (name.includes('pagenoodle')) await root.removeEntry(name, { recursive: true });
+  wipe() {
+    // every request waits until the storage has been destroyed and recreated
+    const prev = initP;
+    initP = (async () => {
+      await prev; // never tear down a database that is still being opened
+      // Remove the storage itself, not just the rows: close the database, delete the OPFS pool
+      // (all its files) and the IndexedDB snapshot, then start again empty.
+      db.exec('DELETE FROM recipes; DELETE FROM signatures; DELETE FROM settings;');
+      compact();
+      db.close();
+      db = null;
+      try {
+        if (sahPool) await sahPool.removeVfs();
+      } catch {
+        /* ignore */
       }
-    } catch {
-      /* ignore */
-    }
-    await new Promise<void>((resolve) => {
-      const r = indexedDB.deleteDatabase(IDB_NAME);
-      r.onsuccess = r.onerror = r.onblocked = () => resolve();
-    });
-    sahPool = null;
-    mode = 'memory';
-    await init(baseUrl);
+      try {
+        const root = await navigator.storage.getDirectory();
+        for await (const name of (root as unknown as { keys(): AsyncIterable<string> }).keys()) {
+          if (name.includes('pagenoodle')) await root.removeEntry(name, { recursive: true });
+        }
+      } catch {
+        /* ignore */
+      }
+      idbConn?.close();
+      idbConn = null;
+      await new Promise<void>((resolve) => {
+        const r = indexedDB.deleteDatabase(IDB_NAME);
+        r.onsuccess = r.onerror = r.onblocked = () => resolve();
+      });
+      sahPool = null;
+      mode = 'memory';
+      return initInner(baseUrl);
+    })();
+    return initP;
   },
 };
 
 self.onmessage = async (e: MessageEvent<{ id: number; method: string; args: unknown[] }>) => {
   const { id, method, args } = e.data;
   try {
-    if (method !== 'init' && !db) throw new Error('storage not ready');
+    if (method !== 'init') {
+      if (!initP) throw new Error('storage not ready');
+      if (method !== 'wipe') await initP;
+    }
     const value = await methods[method](...args);
     (self as DedicatedWorkerGlobalScope).postMessage({ id, ok: true, value });
   } catch (err) {

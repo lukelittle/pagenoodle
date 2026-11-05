@@ -12,7 +12,7 @@ if (window.top !== window.self) {
 } else {
   render(<App />, document.getElementById('app')!);
 
-  if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  if (import.meta.env.PROD && 'serviceWorker' in navigator && navigator.serviceWorker) {
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('./sw.js').then((reg) => {
         reg.addEventListener('updatefound', () => {

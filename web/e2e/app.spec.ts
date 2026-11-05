@@ -294,3 +294,17 @@ test('the app refuses to run inside a frame', async ({ page }) => {
   await page.goto('/framing-test.html');
   await expect(page.frameLocator('iframe').locator('#app')).toContainText('cannot run inside a frame');
 });
+
+test('redaction removes embedded attachments that could hold the original', async ({ page }, testInfo) => {
+  await open(page, [join(FX, '..', 'security', 'attach-zip.pdf')]);
+  await page.getByTestId('tab-redact').click();
+  await page.getByTestId('redact-search').fill('John Smith');
+  await page.keyboard.press('Enter');
+  await page.getByTestId('apply-redaction').click();
+  await expect(page.getByTestId('redaction-result')).toContainText('Attachments and scripts were removed');
+  await page.keyboard.press('Escape');
+  const { path } = await download(page, testInfo);
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(path)) }).promise;
+  expect(await doc.getAttachments()).toBeNull();
+  expect(readFileSync(path).toString('latin1')).not.toContain('EmbeddedFile');
+});

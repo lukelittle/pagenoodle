@@ -27,7 +27,7 @@ function useOfflineStatus() {
     const on = () => setOnline(navigator.onLine);
     window.addEventListener('online', on);
     window.addEventListener('offline', on);
-    if ('serviceWorker' in navigator) navigator.serviceWorker.ready.then(() => setReady(true)).catch(() => {});
+    if (navigator.serviceWorker) navigator.serviceWorker.ready.then(() => setReady(true)).catch(() => {});
     return () => {
       window.removeEventListener('online', on);
       window.removeEventListener('offline', on);

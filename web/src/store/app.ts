@@ -193,6 +193,19 @@ export function undo() {
   });
   toast('Undone ↩︎');
 }
+/** Throw away the current document and go back one step WITHOUT making it redoable
+ * (used when a redaction could not be verified: it must not be recoverable by "Redo"). */
+export function discardLast(expectedDoc: Doc) {
+  if (state.doc !== expectedDoc) return; // something else already changed it
+  const prev = state.past[state.past.length - 1];
+  if (!prev) return;
+  const dropped = state.doc;
+  state = { ...state, doc: prev, past: state.past.slice(0, -1), selected: [] };
+  gcSources([state.doc, ...state.past, ...state.future]);
+  void dropped;
+  listeners.forEach((l) => l());
+}
+
 export function redo() {
   const next = state.future[0];
   if (!next) return;

@@ -22,8 +22,14 @@ static unsigned char *inflate_impl(const unsigned char *in, size_t inlen, size_t
         if (st == TINFL_STATUS_HAS_MORE_OUTPUT) {
             /* Deflate cannot expand more than ~1032:1; anything beyond that is miniz synthesising
              * data from zero padding after the input ran out (an unbounded "bomb"). */
-            if (cap >= PN_MAX_STREAM || (uint64_t)cap > (uint64_t)inlen * 1040u + 65536u) break;
-            cap *= 2; out = (unsigned char *)realloc(out, cap + 1); continue;
+            size_t limit = PN_MAX_STREAM;
+            if ((uint64_t)inlen * 1040u + 65536u < (uint64_t)limit) limit = (size_t)((uint64_t)inlen * 1040u + 65536u);
+            if (cap >= limit) break;
+            size_t ncap = cap * 2 > limit ? limit : cap * 2; /* never grow past the limit */
+            unsigned char *nout = (unsigned char *)realloc(out, ncap + 1);
+            if (!nout) break;
+            out = nout; cap = ncap;
+            continue;
         }
         if (st == TINFL_STATUS_NEEDS_MORE_INPUT) {
             if (inpos >= inlen) { *ok = len > 0; break; } /* truncated: keep what we have */

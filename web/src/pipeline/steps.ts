@@ -2,7 +2,7 @@
 // so the exact same code path powers the UI buttons and one-click recipe replay.
 import { engine } from '../engine/client';
 import { SAVE, type EditOp } from '../engine/types';
-import { getState, setDoc, applyEdits, commit, newId, setState, undo, type PageRef } from '../store/app';
+import { getState, setDoc, applyEdits, commit, newId, setState, discardLast, type PageRef } from '../store/app';
 import { independentCheck } from '../lib/verify';
 import { parseRanges, parseRangeGroups, chunk } from '../lib/util';
 import { annotsToOps } from '../lib/overlay';
@@ -287,12 +287,19 @@ export async function runStep(step: Step, ctx: StepCtx = {}): Promise<StepOutput
         ...terms.map((term): EditOp => ({ type: 'scrubTerm', term })), // annotations, fields, bookmarks, metadata
       ];
       const res = await applyEdits(ops, getState().saveFlags | SAVE.GC | SAVE.COMPRESS, ctx);
-      const v = await engine.verify(res.bytes, items, terms);
-      const ind = await independentCheck(res.bytes, items, terms, src.info.pages);
-      if (v.remaining || v.stillFound.length || ind.underBoxes || ind.termsFound.length) {
-        undo(); // fail closed: never continue a recipe with an unverified redaction
-        throw new Error(`Redaction could not be verified, so it was undone: ${[...v.stillFound, ...ind.termsFound].join(', ') || v.leaked || ind.underBoxes}`);
+      const redactedDoc = getState().doc;
+      let problem = 'verification did not finish';
+      try {
+        const v = await engine.verify(res.bytes, items, terms);
+        const ind = await independentCheck(res.bytes, items, terms, src.info.pages);
+        problem =
+          v.remaining || v.stillFound.length || ind.underBoxes || ind.termsFound.length
+            ? [...v.stillFound, ...ind.termsFound].join(', ') || v.leaked || ind.underBoxes || 'text under boxes'
+            : '';
+      } finally {
+        if (problem) discardLast(redactedDoc); // fail closed, and not recoverable via Redo
       }
+      if (problem) throw new Error(`Redaction could not be verified, so it was discarded: ${problem}`);
       return { report: `${items.reduce((a, it) => a + it.rects.length, 0)} areas redacted and verified` };
     }
     case 'sign': {

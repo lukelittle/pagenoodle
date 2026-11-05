@@ -148,13 +148,16 @@ pn_doc *pn_assemble(pn_doc **docs, const int *pages, const int *rot, int n) {
         }
         if (!dnum) continue;
         pn_obj *dpage = pn_load(dst, dnum);
-        /* inherited attributes from source tree */
-        const char *inh[] = {"Resources", "MediaBox", "CropBox"};
-        for (int k = 0; k < 3; k++) {
+        /* inherited attributes from the source tree (resources merged like PDF.js) */
+        {
+            pn_obj *mr = pn_page_resources(src, spage);
+            pn_dict_put(dpage, "Resources", pn_copy_into(m, mr));
+            pn_drop(mr);
+        }
+        const char *inh[] = {"MediaBox", "CropBox"};
+        for (int k = 0; k < 2; k++) {
             if (pn_dict_get(dpage, inh[k])) continue;
-            pn_obj *node = pn_get(src, spage, "Parent");
-            pn_obj *raw = NULL;
-            for (int d = 0; node && d < 64 && !raw; d++) { raw = pn_dict_get(node, inh[k]); node = pn_get(src, node, "Parent"); }
+            pn_obj *raw = pn_page_inherited_raw(src, spage, inh[k]);
             if (raw) pn_dict_put(dpage, inh[k], pn_copy_into(m, raw));
         }
         if (!pn_dict_get(dpage, "MediaBox")) {

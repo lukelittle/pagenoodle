@@ -111,7 +111,8 @@ static int is_font_or_image_stream(pn_doc *doc, pn_obj *o) {
 static int stream_contains(pn_doc *doc, pn_obj *o, const char *term, const unsigned char *t16, size_t t16len) {
     size_t len; int ok;
     unsigned char *d = pn_stream_decode(doc, o, &len, &ok);
-    int hit = d && bytes_contain(d, len, term, t16, t16len);
+    /* a stream we could not fully decode cannot be proven clean: count it as a hit (fail closed) */
+    int hit = !d || !ok || len >= PN_MAX_STREAM || bytes_contain(d, len, term, t16, t16len);
     free(d);
     return hit;
 }
@@ -149,11 +150,15 @@ int pn_scrub_term(pn_doc *doc, const char *term) {
             for (int d = 0; parent && d < 16 && !hit; d++) { hit = count_direct(pn_dict_get(parent, "V"), term, 0) > 0; parent = pn_get(doc, parent, "Parent"); }
             if (!hit) { pn_arr_push(keep, pn_keep(ar)); continue; }
             changed++;
+            if (!pn_is_annotation(doc, a) || a == page) { pn_arr_push(keep, pn_keep(ar)); continue; }
             if (pn_is_name(pn_get(doc, a, "Subtype"), "Widget")) {
                 pn_dict_del(a, "AP");
                 pn_dict_del(a, "AS");
                 pn_arr_push(keep, pn_keep(ar));
-            } else dropped++;
+            } else {
+                dropped++;
+                if (ar->type == PN_REF && ar->u.ref.num > 0 && ar->u.ref.num < doc->nxref) pn_set_obj(doc, ar->u.ref.num, pn_null());
+            }
         }
         if (dropped) pn_dict_put(page, "Annots", keep); else pn_drop(keep);
     }

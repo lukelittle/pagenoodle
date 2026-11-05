@@ -1,6 +1,6 @@
 // True redaction: removes the underlying text, image pixels and annotations — then proves it.
 import { useRef, useState } from 'preact/hooks';
-import { useApp, setState, applyEdits, withBusy, toast, newId, record, getState, undo } from '../store/app';
+import { useApp, setState, applyEdits, withBusy, toast, newId, record, getState, discardLast } from '../store/app';
 import { independentCheck, geometryMatches, type IndependentResult } from '../lib/verify';
 import { engine } from '../engine/client';
 import { SAVE, type EditOp, type RedactReport } from '../engine/types';
@@ -135,12 +135,20 @@ export function Redact() {
         }
       }
       const res = await applyEdits(ops, flags, ctx);
+      const redactedDoc = getState().doc;
       // Two independent checks on the saved bytes: the engine's own byte-level scan, and PDF.js.
-      const v = await engine.verify(res.bytes, items, usedTerms);
-      const independent = await independentCheck(res.bytes, items, usedTerms, src.info.pages);
+      // Anything other than a confirmed pass (a failed check, an error, Cancel) discards the result.
+      let v: Awaited<ReturnType<typeof engine.verify>> | null = null;
+      let independent: IndependentResult | null = null;
+      try {
+        v = await engine.verify(res.bytes, items, usedTerms);
+        independent = await independentCheck(res.bytes, items, usedTerms, src.info.pages);
+      } finally {
+        const passed = !!v && !!independent && v.remaining === 0 && v.stillFound.length === 0 && !independent.underBoxes && independent.termsFound.length === 0;
+        if (!passed) discardLast(redactedDoc);
+      }
       const ok = v.remaining === 0 && v.stillFound.length === 0 && !independent.underBoxes && independent.termsFound.length === 0;
       if (!ok) {
-        undo(); // never leave a half-redacted document around to be downloaded by mistake
         setResult({ reports: res.reports as RedactReport[], ...v, terms: usedTerms, stripped: strip, independent, reverted: true });
         return;
       }
@@ -313,7 +321,8 @@ export function Redact() {
                     <span class="ok">✓</span>
                     <div>
                       {result.terms.map((t) => `“${t}”`).join(', ')} {result.terms.length > 1 ? 'were' : 'was'} not found in the page text, annotations, form
-                      fields, bookmarks, metadata or any other text in the file (searched byte by byte, including compressed data).
+                      fields, bookmarks, metadata or any other text in the file (searched byte by byte, including compressed data). Attachments and scripts were
+                      removed.
                     </div>
                   </div>
                 )}
@@ -356,6 +365,7 @@ export function Redact() {
                 {result.stripped && <li>Document metadata stripped</li>}
                 <li>The file was fully rewritten — no hidden older versions remain.</li>
                 <li>Images and forms shared with other pages are redacted everywhere they appear.</li>
+                <li>Embedded attachments, scripts and automatic actions were removed.</li>
               </ul>
             )}
           </div>

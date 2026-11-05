@@ -1,0 +1,58 @@
+%PDF-1.7
+%‚„œ”
+1 0 obj
+<</Type/Catalog/Pages 2 0 R/MarkInfo<</Marked true>>/StructTreeRoot 20 0 R>>
+endobj
+2 0 obj
+<</Type/Pages/Kids[3 0 R]/Count 1>>
+endobj
+3 0 obj
+<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Resources<</Font<</F1 9 0 R>>/Properties<</MC0 6 0 R>>>>/Contents 4 0 R>>
+endobj
+4 0 obj
+<</Length 66>>
+stream
+/Span /MC0 BDC BT /F1 24 Tf 100 700 Td (SSN 123-45-6789) Tj ET EMC
+endstream
+endobj
+6 0 obj
+<</ActualText (PROP-SSN 123-45-6789)>>
+endobj
+9 0 obj
+<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>>
+endobj
+20 0 obj
+<</Type/StructTreeRoot/K 21 0 R>>
+endobj
+21 0 obj
+<</Type/StructElem/S/Span/P 20 0 R/Pg 3 0 R/ActualText(STRUCT-SSN 123-45-6789)/Alt(ALT-SSN)/K 0>>
+endobj
+xref
+0 22
+0000000000 65535 f
+0000000015 00000 n
+0000000107 00000 n
+0000000158 00000 n
+0000000295 00000 n
+0000000000 65535 f
+0000000409 00000 n
+0000000000 65535 f
+0000000000 65535 f
+0000000463 00000 n
+0000000000 65535 f
+0000000000 65535 f
+0000000000 65535 f
+0000000000 65535 f
+0000000000 65535 f
+0000000000 65535 f
+0000000000 65535 f
+0000000000 65535 f
+0000000000 65535 f
+0000000000 65535 f
+0000000551 00000 n
+0000000601 00000 n
+trailer
+<</Size 22/Root 1 0 R>>
+startxref
+715
+%%EOF

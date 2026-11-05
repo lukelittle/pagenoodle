@@ -453,6 +453,13 @@ static void test_security_pocs(void) {
         {"struct_stm.pdf", {0, 0, 1000, 1000}, "FORM-SECRET-42"},
         {"tf0.pdf", {0, 0, 1000, 1000}, "ZEROSIZE-SECRET"},
         {"vertical.pdf", {0, 0, 1000, 1000}, "ABCDEFGH"},
+        {"inline_wh.pdf", {90, 690, 400, 730}, "INLINE-HIDDEN"},
+        {"resmerge.pdf", {90, 690, 400, 730}, "MERGED-RES-SECRET"},
+        {"props.pdf", {90, 690, 400, 730}, "PROP-SSN"},
+        {"props.pdf", {90, 690, 400, 730}, "STRUCT-SSN"},
+        {"props.pdf", {90, 690, 400, 730}, "ALT-SSN"},
+        {"pattern_quote.pdf", {0, 0, 1000, 1000}, "PATTERN-SECRET"},
+        {"attach-zip.pdf", {0, 0, 1000, 1000}, "EmbeddedFile"},
     };
     char path[1200];
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
@@ -470,7 +477,9 @@ static void test_security_pocs(void) {
     }
     /* memory-safety / hang cases: every API must just work */
     const char *crashers[] = {"annots_negref.pdf", "bigtr.pdf", "fields_dag.pdf", "img_rowbytes_overflow.pdf", "inflate_exact.pdf",
-                              "objstm_neg.pdf", "objstm_quad.pdf", "pagedag.pdf", "predictor.pdf", "sharedform.pdf", "sharedres.pdf"};
+                              "objstm_neg.pdf", "objstm_quad.pdf", "pagedag.pdf", "predictor.pdf", "sharedform.pdf", "sharedres.pdf",
+                              "uaf_popup_page.pdf", "uaf_popup_self.pdf", "uaf_annot_page.pdf", "uaf_image_is_page.pdf", "uaf_selfform.pdf",
+                              "formfan.pdf", "parentchain.pdf"};
     for (size_t i = 0; i < sizeof crashers / sizeof crashers[0]; i++) {
         snprintf(path, sizeof path, "%s/../security/%s", g_dir, crashers[i]);
         int len;
@@ -481,13 +490,28 @@ static void test_security_pocs(void) {
         if (h) {
             nd_info(h); nd_forms(h); nd_images(h);
             for (int p = 0; p < nd_page_count(h) && p < 20; p++) nd_text(h, p);
-            double r[4] = {100, 100, 150, 150};
+            double r[4] = {90, 690, 400, 730};
             nd_redact(h, 0, r, 1, 0);
+            nd_search(h, "SECRET", 1);
             nd_save(h, 1 | 2 | 4 | 8 | 16 | 32);
             nd_close(h);
         }
         CHECK(1, "%s handled", crashers[i]);
     }
+}
+
+static void test_geometry_like_pdfjs(void) {
+    puts("page geometry follows PDF.js");
+    char path[1200];
+    snprintf(path, sizeof path, "%s/../security/parentchain.pdf", g_dir);
+    int len;
+    unsigned char *d = slurp_path(path, &len);
+    int h = d ? nd_open(d, len) : 0;
+    free(d);
+    CHECK(h > 0, "open parentchain");
+    nd_info(h);
+    CHECK(strstr((char *)nd_out_ptr(), "{\"rot\":90,\"vw\":492.000,\"vh\":612.000") != NULL, "70-level /Parent chain inherits rotate+crop: %s", (char *)nd_out_ptr());
+    nd_close(h);
 }
 
 int main(int argc, char **argv) {
@@ -505,6 +529,7 @@ int main(int argc, char **argv) {
     test_adversarial();
     test_fuzz_regressions();
     test_security_pocs();
+    test_geometry_like_pdfjs();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

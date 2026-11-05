@@ -1,6 +1,7 @@
 /* True redaction: image pixel scrubbing, annotation/field removal, page-level orchestration. */
 #include "pn.h"
 #include "pn_engine.h"
+int pn_redact_pattern(pn_doc *doc, pn_obj *pat);
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -161,6 +162,42 @@ static void scrub_field(pn_doc *doc, pn_obj *widget) {
     pn_dict_del(widget, "AS");
 }
 
+/* Things that can carry a full unredacted copy of the document (attachments, often the original
+ * file) or run code are removed from the whole document whenever anything is redacted. */
+static void redact_doc_cleanup(pn_doc *doc, pn_redact_stats *st) {
+    pn_obj *cat = pn_catalog(doc);
+    pn_obj *names = pn_get(doc, cat, "Names");
+    if (pn_is(names, PN_DICT)) {
+        if (pn_dict_get(names, "EmbeddedFiles")) st->annots++;
+        pn_dict_del(names, "EmbeddedFiles");
+        pn_dict_del(names, "JavaScript");
+    }
+    const char *catkeys[] = {"OpenAction", "AA", "AF", "Collection"};
+    for (int i = 0; i < 4; i++) pn_dict_del(cat, catkeys[i]);
+    int np = pn_doc_page_count(doc);
+    for (int p = 0; p < np; p++) {
+        pn_obj *page = pn_doc_page(doc, p);
+        pn_dict_del(page, "AA");
+        pn_dict_del(page, "AF");
+        pn_obj *annots = pn_get(doc, page, "Annots");
+        if (!pn_is(annots, PN_ARRAY)) continue;
+        pn_obj *keep = pn_new_array();
+        for (int i = 0; i < pn_arr_len(annots); i++) {
+            pn_obj *ar = pn_arr_get(annots, i);
+            pn_obj *a = pn_resolve(doc, ar);
+            const char *sub = pn_name(pn_get(doc, a, "Subtype"));
+            if (a != page && pn_is_annotation(doc, a) && (!strcmp(sub, "FileAttachment") || !strcmp(sub, "Sound") || !strcmp(sub, "Movie") || !strcmp(sub, "RichMedia") || !strcmp(sub, "Screen") || !strcmp(sub, "3D"))) {
+                st->annots++;
+                if (ar->type == PN_REF && ar->u.ref.num > 0 && ar->u.ref.num < doc->nxref) pn_set_obj(doc, ar->u.ref.num, pn_null());
+                continue;
+            }
+            if (pn_is(a, PN_DICT)) { pn_dict_del(a, "AA"); pn_dict_del(a, "AF"); }
+            pn_arr_push(keep, pn_keep(ar));
+        }
+        pn_dict_put(page, "Annots", keep);
+    }
+}
+
 int pn_redact_page(pn_doc *doc, int pageidx, const pn_rect *rects, int n, int fill_rgb, pn_redact_stats *st, pn_buf *removed) {
     pn_obj *page = pn_doc_page(doc, pageidx);
     if (!page) return -1;
@@ -176,18 +213,20 @@ int pn_redact_page(pn_doc *doc, int pageidx, const pn_rect *rects, int n, int fi
             int hit = 0;
             if (a && rect_from_array(doc, pn_get(doc, a, "Rect"), &r))
                 for (int k = 0; k < n; k++) if (pn_rect_intersects(r, rects[k])) hit = 1;
-            if (hit) {
+            if (hit && pn_is_annotation(doc, a)) {
                 st->annots++;
-                if (pn_is_name(pn_get(doc, a, "Subtype"), "Widget")) scrub_field(doc, a);
+                int is_widget = pn_is_name(pn_get(doc, a, "Subtype"), "Widget");
+                if (is_widget) scrub_field(doc, a);
                 /* The annotation may still be reachable (popup /Parent, structure tree, form
                  * fields), so blank its content-bearing keys and then null the object itself. */
                 const char *keys[] = {"Contents", "RC", "T", "Subj", "AP", "AS", "RichMediaContent", "DS", "TU", "V", "DV"};
                 pn_obj *popup_ref = pn_dict_get(a, "Popup");
                 pn_obj *popup = pn_get(doc, a, "Popup");
-                for (int k = 0; k < 11; k++) { pn_dict_del(a, keys[k]); if (popup) pn_dict_del(popup, keys[k]); }
-                if (popup_ref && popup_ref->type == PN_REF && popup_ref->u.ref.num > 0 && popup_ref->u.ref.num < doc->nxref)
+                int popup_ok = popup && popup != a && popup != page && pn_is_annotation(doc, popup);
+                for (int k = 0; k < 11; k++) { pn_dict_del(a, keys[k]); if (popup_ok) pn_dict_del(popup, keys[k]); }
+                if (popup_ok && popup_ref->type == PN_REF && popup_ref->u.ref.num > 0 && popup_ref->u.ref.num < doc->nxref)
                     pn_set_obj(doc, popup_ref->u.ref.num, pn_null());
-                if (!pn_is_name(pn_get(doc, a, "Subtype"), "Widget") && ar->type == PN_REF && ar->u.ref.num > 0 && ar->u.ref.num < doc->nxref)
+                if (!is_widget && ar->type == PN_REF && ar->u.ref.num > 0 && ar->u.ref.num < doc->nxref)
                     pn_set_obj(doc, ar->u.ref.num, pn_null());
                 continue;
             }
@@ -195,6 +234,7 @@ int pn_redact_page(pn_doc *doc, int pageidx, const pn_rect *rects, int n, int fi
         }
         pn_dict_put(page, "Annots", na);
     }
+    redact_doc_cleanup(doc, st);
     /* page-level side data that can carry copies of the page content */
     pn_dict_del(page, "PieceInfo");
     pn_dict_del(page, "Thumb");
@@ -203,17 +243,26 @@ int pn_redact_page(pn_doc *doc, int pageidx, const pn_rect *rects, int n, int fi
     if (pn_is(af, PN_DICT)) pn_dict_del(af, "XFA"); /* XFA duplicates all form data */
     /* tiling patterns can draw text; patterns on a redacted page that do are emptied (fail closed) */
     {
-        pn_obj *pd = pn_get(doc, pn_page_inherited(doc, page, "Resources"), "Pattern");
-        for (int i = 0; i < pn_dict_len(pd); i++) {
-            pn_obj *pat = pn_resolve(doc, pn_dict_val(pd, i));
-            if (!pn_is(pat, PN_STREAM) || pn_int(pn_get(doc, pat, "PatternType"), 0) != 1) continue;
-            size_t pl; int pok;
-            unsigned char *pdat = pn_stream_decode(doc, pat, &pl, &pok);
-            int has_text = !pok;
-            for (size_t k = 0; pdat && k + 1 < pl && !has_text; k++)
-                if ((pdat[k] == 'T' && (pdat[k + 1] == 'j' || pdat[k + 1] == 'J')) || (pdat[k] == 'D' && pdat[k + 1] == 'o') || (pdat[k] == 'B' && pdat[k + 1] == 'I')) has_text = 1;
-            free(pdat);
-            if (has_text) { pn_stream_set(pat, (const unsigned char *)"", 0, 0); st->forms++; }
+        pn_obj *mres = pn_page_resources(doc, page);
+        pn_retire(doc, mres);
+        pn_drop(mres);
+        pn_obj *pd = pn_get(doc, mres, "Pattern");
+        for (int i = 0; i < pn_dict_len(pd); i++)
+            if (pn_redact_pattern(doc, pn_resolve(doc, pn_dict_val(pd, i)))) st->forms++;
+    }
+    /* structure elements of this page: alternate/replacement text may repeat redacted content */
+    {
+        int pnum = pn_doc_page_num(doc, pageidx);
+        for (int i = 1; i < doc->nxref; i++) {
+            pn_obj *o = doc->xref[i].obj ? doc->xref[i].obj : pn_load(doc, i);
+            if (!pn_is(o, PN_DICT) || !pn_dict_get(o, "S")) continue;
+            pn_obj *pg = NULL, *node = o; /* /Pg may be inherited from an ancestor element */
+            for (int d = 0; node && d < 64 && !pg; d++) { pg = pn_dict_get(node, "Pg"); node = pn_get(doc, node, "P"); }
+            if (pg && pg->type == PN_REF && pg->u.ref.num == pnum) {
+                pn_dict_del(o, "ActualText");
+                pn_dict_del(o, "Alt");
+                pn_dict_del(o, "E");
+            }
         }
     }
     /* draw fill boxes on top */
