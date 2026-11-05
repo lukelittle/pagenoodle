@@ -19,7 +19,8 @@ const copy = (from, to) => {
 copy('pdfjs-dist/standard_fonts', 'pdfjs/standard_fonts');
 copy('pdfjs-dist/cmaps', 'pdfjs/cmaps');
 copy('pdfjs-dist/iccs', 'pdfjs/iccs');
-for (const f of ['openjpeg.wasm', 'jbig2.wasm', 'qcms_bg.wasm', 'openjpeg_nowasm_fallback.js', 'jbig2_nowasm_fallback.js']) copy(`pdfjs-dist/wasm/${f}`, `pdfjs/wasm/${f}`);
+for (const f of ['openjpeg.wasm', 'jbig2.wasm', 'qcms_bg.wasm', 'openjpeg_nowasm_fallback.js', 'jbig2_nowasm_fallback.js'])
+  copy(`pdfjs-dist/wasm/${f}`, `pdfjs/wasm/${f}`);
 copy('pdfjs-dist/LICENSE', 'pdfjs/LICENSE');
 
 // SQLite WASM (public domain / Apache-2.0 wrapper)

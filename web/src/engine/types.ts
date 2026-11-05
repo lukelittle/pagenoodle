@@ -50,12 +50,12 @@ export interface OverlayImage {
  *   /%I:n%               → n-th image of `images`
  */
 export type EditOp =
-  | { type: "overlay"; page: number; ops: string; images?: OverlayImage[] }
-  | { type: "redact"; page: number; rects: number[][]; fill: number }
-  | { type: "formSet"; id: number; value: string }
-  | { type: "formFlatten" }
+  | { type: 'overlay'; page: number; ops: string; images?: OverlayImage[] }
+  | { type: 'redact'; page: number; rects: number[][]; fill: number }
+  | { type: 'formSet'; id: number; value: string }
+  | { type: 'formFlatten' }
   | {
-      type: "stamp";
+      type: 'stamp';
       template: string;
       position: number;
       size: number;
@@ -66,7 +66,7 @@ export type EditOp =
       font: string;
       color: number;
     }
-  | { type: "compressImages"; quality: number; maxDim: number };
+  | { type: 'compressImages'; quality: number; maxDim: number };
 
 export interface RedactReport {
   ok: boolean;
@@ -106,14 +106,7 @@ export interface FormWidget {
 export interface FormField {
   id: number;
   name: string;
-  type:
-    | "text"
-    | "checkbox"
-    | "radio"
-    | "combo"
-    | "list"
-    | "button"
-    | "signature";
+  type: 'text' | 'checkbox' | 'radio' | 'combo' | 'list' | 'button' | 'signature';
   readonly: boolean;
   multiline: boolean;
   maxlen: number;
@@ -127,7 +120,7 @@ export interface ImageSpec {
   mime: string;
 }
 
-export type PageSizeMode = "fit-a4" | "fit-letter" | "original";
+export type PageSizeMode = 'fit-a4' | 'fit-letter' | 'original';
 
 export interface WorkerRequest {
   id: number;
@@ -136,6 +129,6 @@ export interface WorkerRequest {
 }
 
 export type WorkerResponse =
-  | { id: number; type: "result"; value: unknown }
-  | { id: number; type: "error"; message: string }
-  | { id: number; type: "progress"; done: number; total: number };
+  | { id: number; type: 'result'; value: unknown }
+  | { id: number; type: 'error'; message: string }
+  | { id: number; type: 'progress'; done: number; total: number };

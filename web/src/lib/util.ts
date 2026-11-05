@@ -4,25 +4,25 @@
 export function parseRanges(spec: string, count: number): number[] {
   const s = spec.trim().toLowerCase();
   const all = Array.from({ length: count }, (_, i) => i);
-  if (!s || s === "all") return all;
-  if (s === "odd") return all.filter((i) => i % 2 === 0);
-  if (s === "even") return all.filter((i) => i % 2 === 1);
+  if (!s || s === 'all') return all;
+  if (s === 'odd') return all.filter((i) => i % 2 === 0);
+  if (s === 'even') return all.filter((i) => i % 2 === 1);
   const out = new Set<number>();
   for (const part0 of s.split(/[,;\s]+/)) {
     const part = part0.trim();
     if (!part) continue;
-    if (part === "last") {
+    if (part === 'last') {
       if (count) out.add(count - 1);
       continue;
     }
-    if (part === "first") {
+    if (part === 'first') {
       if (count) out.add(0);
       continue;
     }
     const m = /^(\d*)\s*-\s*(\d*|last)$/.exec(part);
     if (m) {
       const a = m[1] ? parseInt(m[1], 10) : 1;
-      const b = m[2] === "last" || !m[2] ? count : parseInt(m[2], 10);
+      const b = m[2] === 'last' || !m[2] ? count : parseInt(m[2], 10);
       for (let i = Math.max(1, a); i <= Math.min(count, b); i++) out.add(i - 1);
       continue;
     }
@@ -46,18 +46,13 @@ export function chunk<T>(arr: T[], n: number): T[][] {
   return out;
 }
 
-export function downloadBlob(
-  data: Uint8Array | Blob,
-  name: string,
-  mime = "application/pdf",
-) {
-  const blob =
-    data instanceof Blob ? data : new Blob([data as BlobPart], { type: mime });
+export function downloadBlob(data: Uint8Array | Blob, name: string, mime = 'application/pdf') {
+  const blob = data instanceof Blob ? data : new Blob([data as BlobPart], { type: mime });
   const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
+  const a = document.createElement('a');
   a.href = url;
   a.download = name;
-  a.rel = "noopener";
+  a.rel = 'noopener';
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -66,11 +61,11 @@ export function downloadBlob(
 
 export function safeName(base: string): string {
   return (
-    (base || "document")
-      .replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "_")
-      .replace(/\s+/g, " ")
+    (base || 'document')
+      .replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '_')
+      .replace(/\s+/g, ' ')
       .trim()
-      .slice(0, 120) || "document"
+      .slice(0, 120) || 'document'
   );
 }
 
@@ -92,8 +87,7 @@ const CRC_TABLE = (() => {
 })();
 export function crc32(d: Uint8Array): number {
   let c = 0xffffffff;
-  for (let i = 0; i < d.length; i++)
-    c = CRC_TABLE[(c ^ d[i]) & 0xff] ^ (c >>> 8);
+  for (let i = 0; i < d.length; i++) c = CRC_TABLE[(c ^ d[i]) & 0xff] ^ (c >>> 8);
   return (c ^ 0xffffffff) >>> 0;
 }
 
@@ -105,8 +99,7 @@ export function makeZip(files: { name: string; data: Uint8Array }[]): Blob {
   const used = new Set<string>();
   for (const f of files) {
     let name = f.name;
-    for (let i = 2; used.has(name); i++)
-      name = f.name.replace(/(\.[^.]*)?$/, ` (${i})$1`);
+    for (let i = 2; used.has(name); i++) name = f.name.replace(/(\.[^.]*)?$/, ` (${i})$1`);
     used.add(name);
     const nb = enc.encode(name);
     const crc = crc32(f.data);
@@ -140,12 +133,7 @@ export function makeZip(files: { name: string; data: Uint8Array }[]): Blob {
   end.setUint16(10, files.length, true);
   end.setUint32(12, csize, true);
   end.setUint32(16, offset, true);
-  return new Blob(
-    [...parts, ...central, new Uint8Array(end.buffer)] as BlobPart[],
-    { type: "application/zip" },
-  );
+  return new Blob([...parts, ...central, new Uint8Array(end.buffer)] as BlobPart[], { type: 'application/zip' });
 }
 
-export const prefersReducedMotion = () =>
-  typeof matchMedia !== "undefined" &&
-  matchMedia("(prefers-reduced-motion: reduce)").matches;
+export const prefersReducedMotion = () => typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;

@@ -11,7 +11,7 @@ type G = typeof globalThis & {
 export function isSameOrigin(input: string | URL, base: string): boolean {
   try {
     const url = new URL(String(input), base);
-    if (url.protocol === "blob:" || url.protocol === "data:") return true;
+    if (url.protocol === 'blob:' || url.protocol === 'data:') return true;
     return url.origin === new URL(base).origin;
   } catch {
     return false;
@@ -31,42 +31,36 @@ export function installNetGuard(): void {
   const origFetch = g.fetch?.bind(g);
   if (origFetch) {
     g.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-      const url =
-        typeof input === "string" || input instanceof URL ? input : input.url;
-      if (!isSameOrigin(url, base)) return Promise.reject(deny("fetch", url));
+      const url = typeof input === 'string' || input instanceof URL ? input : input.url;
+      if (!isSameOrigin(url, base)) return Promise.reject(deny('fetch', url));
       return origFetch(input, init);
     }) as typeof fetch;
   }
-  if (typeof XMLHttpRequest !== "undefined") {
+  if (typeof XMLHttpRequest !== 'undefined') {
     const open = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function (
-      this: XMLHttpRequest,
-      method: string,
-      url: string | URL,
-      ...rest: unknown[]
-    ) {
-      if (!isSameOrigin(url, base)) throw deny("XMLHttpRequest", url);
+    XMLHttpRequest.prototype.open = function (this: XMLHttpRequest, method: string, url: string | URL, ...rest: unknown[]) {
+      if (!isSameOrigin(url, base)) throw deny('XMLHttpRequest', url);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return (open as any).call(this, method, url, ...rest);
     } as typeof XMLHttpRequest.prototype.open;
   }
-  const block = (name: "WebSocket" | "EventSource" | "RTCPeerConnection") => {
+  const block = (name: 'WebSocket' | 'EventSource' | 'RTCPeerConnection') => {
     if (name in g) {
       Object.defineProperty(g, name, {
         configurable: false,
         writable: false,
         value: function () {
-          throw deny(name, "(any)");
+          throw deny(name, '(any)');
         },
       });
     }
   };
-  block("WebSocket");
-  block("EventSource");
-  block("RTCPeerConnection");
-  if (typeof navigator !== "undefined" && "sendBeacon" in navigator) {
+  block('WebSocket');
+  block('EventSource');
+  block('RTCPeerConnection');
+  if (typeof navigator !== 'undefined' && 'sendBeacon' in navigator) {
     try {
-      Object.defineProperty(navigator, "sendBeacon", {
+      Object.defineProperty(navigator, 'sendBeacon', {
         value: () => false,
         configurable: false,
       });
@@ -74,13 +68,10 @@ export function installNetGuard(): void {
       /* ignore */
     }
   }
-  if (typeof g.importScripts === "function") {
+  if (typeof g.importScripts === 'function') {
     const imp = g.importScripts.bind(g);
-    (g as { importScripts: unknown }).importScripts = (
-      ...urls: (string | URL)[]
-    ) => {
-      for (const u of urls)
-        if (!isSameOrigin(u, base)) throw deny("importScripts", u);
+    (g as { importScripts: unknown }).importScripts = (...urls: (string | URL)[]) => {
+      for (const u of urls) if (!isSameOrigin(u, base)) throw deny('importScripts', u);
       imp(...(urls as string[]));
     };
   }

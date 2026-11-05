@@ -1,24 +1,15 @@
 // True redaction: removes the underlying text, image pixels and annotations — then proves it.
-import { useRef, useState } from "preact/hooks";
-import {
-  useApp,
-  setState,
-  applyEdits,
-  withBusy,
-  toast,
-  newId,
-  record,
-  getState,
-} from "../store/app";
-import { engine } from "../engine/client";
-import { SAVE, type EditOp, type RedactReport } from "../engine/types";
-import { userToVisual, visualToUser, type Annot } from "../lib/overlay";
-import { Icon, Dialog } from "./ui";
-import { PageView, MiniPage, pointOf, useStageWidth } from "./PageView";
-import { AnnotShape, useCommitted } from "./Editor";
-import { setSuffix } from "./actions";
+import { useRef, useState } from 'preact/hooks';
+import { useApp, setState, applyEdits, withBusy, toast, newId, record, getState } from '../store/app';
+import { engine } from '../engine/client';
+import { SAVE, type EditOp, type RedactReport } from '../engine/types';
+import { userToVisual, visualToUser, type Annot } from '../lib/overlay';
+import { Icon, Dialog } from './ui';
+import { PageView, MiniPage, pointOf, useStageWidth } from './PageView';
+import { AnnotShape, useCommitted } from './Editor';
+import { setSuffix } from './actions';
 
-type Box = Extract<Annot, { kind: "redact" }>;
+type Box = Extract<Annot, { kind: 'redact' }>;
 
 interface Verification {
   reports: RedactReport[];
@@ -35,7 +26,7 @@ export function Redact() {
   const [boxes, setBoxes] = useState<Record<number, Box[]>>({});
   const [draft, setDraft] = useState<Box | null>(null);
   const [selId, setSelId] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState('');
   const [terms, setTerms] = useState<string[]>([]);
   const [strip, setStrip] = useState(true);
   const [result, setResult] = useState<Verification | null>(null);
@@ -54,8 +45,7 @@ export function Redact() {
     const q = query.trim();
     if (!q) return;
     const hits = await engine.search(src.key, q);
-    if (!hits.length)
-      return toast(`No “${q}” found. (Scanned pages? Run OCR first.)`);
+    if (!hits.length) return toast(`No “${q}” found. (Scanned pages? Run OCR first.)`);
     setBoxes((b) => {
       const out = { ...b };
       for (const h of hits) {
@@ -63,32 +53,29 @@ export function Redact() {
         const add = h.r.map((r) => {
           const pad = (r[3] - r[1]) * 0.06;
           const v = userToVisual(pi, [r[0], r[1] - pad, r[2], r[3] + pad]);
-          return { id: newId("r"), kind: "redact" as const, ...v };
+          return { id: newId('r'), kind: 'redact' as const, ...v };
         });
         out[h.p] = [...(out[h.p] ?? []), ...add];
       }
       return out;
     });
     setTerms((t) => [...new Set([...t, q])]);
-    setQuery("");
-    toast(
-      `Marked ${hits.length} match${hits.length > 1 ? "es" : ""} for redaction`,
-      "success",
-    );
+    setQuery('');
+    toast(`Marked ${hits.length} match${hits.length > 1 ? 'es' : ''} for redaction`, 'success');
   };
 
   const onDown = (e: PointerEvent) => {
-    const t = (e.target as Element).closest("[data-annot]");
+    const t = (e.target as Element).closest('[data-annot]');
     if (t) {
-      setSelId(t.getAttribute("data-annot"));
+      setSelId(t.getAttribute('data-annot'));
       return;
     }
     setSelId(null);
     start.current = pointOf(e, svgRef.current!, info);
     svgRef.current!.setPointerCapture(e.pointerId);
     setDraft({
-      id: newId("r"),
-      kind: "redact",
+      id: newId('r'),
+      kind: 'redact',
       x: start.current[0],
       y: start.current[1],
       w: 0,
@@ -108,8 +95,7 @@ export function Redact() {
     });
   };
   const onUp = () => {
-    if (draft && draft.w > 2 && draft.h > 2)
-      setBoxes((b) => ({ ...b, [page]: [...(b[page] ?? []), draft] }));
+    if (draft && draft.w > 2 && draft.h > 2) setBoxes((b) => ({ ...b, [page]: [...(b[page] ?? []), draft] }));
     setDraft(null);
     start.current = null;
   };
@@ -123,47 +109,36 @@ export function Redact() {
   };
 
   const apply = async () => {
-    if (!total)
-      return toast("Draw boxes over what should vanish, or search for words.");
+    if (!total) return toast('Draw boxes over what should vanish, or search for words.');
     const items = Object.entries(boxes)
       .filter(([, b]) => b.length)
       .map(([p, b]) => ({
         page: +p,
-        rects: b.map((x) =>
-          visualToUser(src.info.pageInfo[+p], x.x, x.y, x.w, x.h),
-        ),
+        rects: b.map((x) => visualToUser(src.info.pageInfo[+p], x.x, x.y, x.w, x.h)),
       }));
     const ops: EditOp[] = items.map((it) => ({
-      type: "redact",
+      type: 'redact',
       page: it.page,
       rects: it.rects,
       fill: 0x000000,
     }));
-    const flags =
-      getState().saveFlags |
-      SAVE.GC |
-      SAVE.COMPRESS |
-      (strip ? SAVE.STRIPMETA : 0);
-    await withBusy(
-      "Redacting for real (not just a black box)…",
-      async (ctx) => {
-        const res = await applyEdits(ops, flags, ctx);
-        if (strip)
-          setState({ saveFlags: getState().saveFlags | SAVE.STRIPMETA });
-        const v = await engine.verify(res.bytes, items, terms);
-        setResult({
-          reports: res.reports as RedactReport[],
-          ...v,
-          terms,
-          stripped: strip,
-        });
-        if (terms.length) record({ op: "redactText", terms });
-        if (strip) record({ op: "stripMetadata" });
-        setBoxes({});
-        setTerms([]);
-        setSuffix("redacted");
-      },
-    );
+    const flags = getState().saveFlags | SAVE.GC | SAVE.COMPRESS | (strip ? SAVE.STRIPMETA : 0);
+    await withBusy('Redacting for real (not just a black box)…', async (ctx) => {
+      const res = await applyEdits(ops, flags, ctx);
+      if (strip) setState({ saveFlags: getState().saveFlags | SAVE.STRIPMETA });
+      const v = await engine.verify(res.bytes, items, terms);
+      setResult({
+        reports: res.reports as RedactReport[],
+        ...v,
+        terms,
+        stripped: strip,
+      });
+      if (terms.length) record({ op: 'redactText', terms });
+      if (strip) record({ op: 'stripMetadata' });
+      setBoxes({});
+      setTerms([]);
+      setSuffix('redacted');
+    });
   };
 
   const agg = result?.reports.reduce(
@@ -175,8 +150,7 @@ export function Redact() {
     }),
     { glyphs: 0, scrub: 0, rm: 0, annots: 0 },
   );
-  const verified =
-    result && result.remaining === 0 && result.stillFound.length === 0;
+  const verified = result && result.remaining === 0 && result.stillFound.length === 0;
 
   return (
     <div class="editor">
@@ -186,12 +160,12 @@ export function Redact() {
             key={i}
             aria-current={i === page}
             onClick={() => setState({ editPage: i })}
-            aria-label={`Page ${i + 1}${(boxes[i] ?? []).length ? `, ${(boxes[i] ?? []).length} redactions` : ""}`}
+            aria-label={`Page ${i + 1}${(boxes[i] ?? []).length ? `, ${(boxes[i] ?? []).length} redactions` : ''}`}
           >
             <MiniPage srcKey={src.key} index={i} />
             <span class="hint">
               {i + 1}
-              {(boxes[i] ?? []).length ? ` ■${(boxes[i] ?? []).length}` : ""}
+              {(boxes[i] ?? []).length ? ` ■${(boxes[i] ?? []).length}` : ''}
             </span>
           </button>
         ))}
@@ -199,12 +173,7 @@ export function Redact() {
       <section class="stage" ref={stageRef} aria-label="Redaction editor">
         <div class="stage-toolbar">
           <span class="hint">Drag to cover anything secret.</span>
-          <button
-            class="btn small"
-            onClick={() => setState({ editPage: Math.max(0, page - 1) })}
-            disabled={page === 0}
-            aria-label="Previous page"
-          >
+          <button class="btn small" onClick={() => setState({ editPage: Math.max(0, page - 1) })} disabled={page === 0} aria-label="Previous page">
             <Icon name="chevl" />
           </button>
           <span class="hint">
@@ -212,19 +181,13 @@ export function Redact() {
           </span>
           <button
             class="btn small"
-            onClick={() =>
-              setState({ editPage: Math.min(src.info.pages - 1, page + 1) })
-            }
+            onClick={() => setState({ editPage: Math.min(src.info.pages - 1, page + 1) })}
             disabled={page >= src.info.pages - 1}
             aria-label="Next page"
           >
             <Icon name="chevr" />
           </button>
-          <button
-            class="btn small danger"
-            onClick={removeSel}
-            disabled={!selId}
-          >
+          <button class="btn small danger" onClick={removeSel} disabled={!selId}>
             <Icon name="trash" /> Remove box
           </button>
         </div>
@@ -239,8 +202,8 @@ export function Redact() {
             onPointerDown: onDown,
             onPointerMove: onMove,
             onPointerUp: onUp,
-            style: { cursor: "crosshair" },
-            "data-testid": "redact-overlay",
+            style: { cursor: 'crosshair' },
+            'data-testid': 'redact-overlay',
           }}
         >
           {[...list, ...(draft ? [draft] : [])].map((b) => (
@@ -274,49 +237,33 @@ export function Redact() {
               Mark all
             </button>
           </form>
-          {terms.length > 0 && (
-            <p class="hint">
-              Will verify these are gone everywhere:{" "}
-              {terms.map((t) => `“${t}”`).join(", ")}
-            </p>
-          )}
+          {terms.length > 0 && <p class="hint">Will verify these are gone everywhere: {terms.map((t) => `“${t}”`).join(', ')}</p>}
         </div>
         <div class="panel">
           <h2>
             <Icon name="shield" /> Redaction
           </h2>
           <p class="hint" style={{ marginTop: 0 }}>
-            {total} area{total === 1 ? "" : "s"} marked. Pagenoodle deletes the
-            text, image pixels and form data underneath — not just paints over
-            them — then re-reads the file to prove it.
+            {total} area{total === 1 ? '' : 's'} marked. Pagenoodle deletes the text, image pixels and form data underneath — not just paints over them — then
+            re-reads the file to prove it.
           </p>
           <label
             style={{
-              display: "flex",
+              display: 'flex',
               gap: 8,
-              alignItems: "center",
-              margin: "8px 0",
+              alignItems: 'center',
+              margin: '8px 0',
             }}
           >
-            <input
-              type="checkbox"
-              checked={strip}
-              onChange={(e) => setStrip((e.target as HTMLInputElement).checked)}
-            />{" "}
-            Also strip metadata (author, title, XMP…)
+            <input type="checkbox" checked={strip} onChange={(e) => setStrip((e.target as HTMLInputElement).checked)} /> Also strip metadata (author, title,
+            XMP…)
           </label>
-          <button
-            class="btn primary"
-            style={{ width: "100%", justifyContent: "center" }}
-            onClick={apply}
-            disabled={!total}
-            data-testid="apply-redaction"
-          >
+          <button class="btn primary" style={{ width: '100%', justifyContent: 'center' }} onClick={apply} disabled={!total} data-testid="apply-redaction">
             <Icon name="redact" /> Apply redaction
           </button>
           <button
             class="btn ghost"
-            style={{ width: "100%", justifyContent: "center", marginTop: 6 }}
+            style={{ width: '100%', justifyContent: 'center', marginTop: 6 }}
             onClick={() => {
               setBoxes({});
               setTerms([]);
@@ -329,35 +276,24 @@ export function Redact() {
       </aside>
       {result && agg && (
         <Dialog
-          title={
-            verified ? "Redaction verified ✅" : "Redaction needs attention ⚠️"
-          }
+          title={verified ? 'Redaction verified ✅' : 'Redaction needs attention ⚠️'}
           onClose={() => setResult(null)}
           actions={
-            <button
-              class="btn primary"
-              onClick={() => setResult(null)}
-              autoFocus
-            >
+            <button class="btn primary" onClick={() => setResult(null)} autoFocus>
               Great
             </button>
           }
         >
           <div data-testid="redaction-result">
             <div class="check">
-              <span class={verified ? "ok" : "bad"}>
-                {verified ? "✓" : "✗"}
-              </span>
+              <span class={verified ? 'ok' : 'bad'}>{verified ? '✓' : '✗'}</span>
               <div>
                 {verified ? (
                   <>
-                    I re-opened the redacted file and extracted its text again:{" "}
-                    <b>0 characters</b> remain under the boxes
+                    I re-opened the redacted file and extracted its text again: <b>0 characters</b> remain under the boxes
                     {result.terms.length ? (
                       <>
-                        , and {result.terms.map((t) => `“${t}”`).join(", ")}{" "}
-                        {result.terms.length > 1 ? "appear" : "appears"}{" "}
-                        <b>nowhere</b> in the document
+                        , and {result.terms.map((t) => `“${t}”`).join(', ')} {result.terms.length > 1 ? 'appear' : 'appears'} <b>nowhere</b> in the document
                       </>
                     ) : null}
                     .
@@ -365,10 +301,7 @@ export function Redact() {
                 ) : (
                   <>
                     {result.remaining} character(s) still found under the boxes
-                    {result.stillFound.length
-                      ? `; still present: ${result.stillFound.join(", ")}`
-                      : ""}
-                    . Leaked: “{result.leaked}”
+                    {result.stillFound.length ? `; still present: ${result.stillFound.join(', ')}` : ''}. Leaked: “{result.leaked}”
                   </>
                 )}
               </div>
@@ -379,26 +312,22 @@ export function Redact() {
               </li>
               {agg.scrub > 0 && (
                 <li>
-                  <b>{agg.scrub}</b> image{agg.scrub > 1 ? "s" : ""} had pixels
-                  under the boxes wiped
+                  <b>{agg.scrub}</b> image{agg.scrub > 1 ? 's' : ''} had pixels under the boxes wiped
                 </li>
               )}
               {agg.rm > 0 && (
                 <li>
-                  <b>{agg.rm}</b> image{agg.rm > 1 ? "s" : ""} removed entirely
-                  (couldn't be partially wiped safely)
+                  <b>{agg.rm}</b> image{agg.rm > 1 ? 's' : ''} removed entirely (couldn't be partially wiped safely)
                 </li>
               )}
               {agg.annots > 0 && (
                 <li>
                   <b>{agg.annots}</b> annotation/form field
-                  {agg.annots > 1 ? "s" : ""} removed
+                  {agg.annots > 1 ? 's' : ''} removed
                 </li>
               )}
               {result.stripped && <li>Document metadata stripped</li>}
-              <li>
-                The file was fully rewritten — no hidden older versions remain.
-              </li>
+              <li>The file was fully rewritten — no hidden older versions remain.</li>
             </ul>
           </div>
         </Dialog>

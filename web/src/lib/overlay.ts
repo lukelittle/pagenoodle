@@ -1,11 +1,11 @@
 // Converts on-screen annotations (in visual page points, top-left origin) to PDF content operators.
-import type { OverlayImage, PageInfo } from "../engine/types";
-import { HELVETICA, HELVETICA_BOLD } from "./metrics";
+import type { OverlayImage, PageInfo } from '../engine/types';
+import { HELVETICA, HELVETICA_BOLD } from './metrics';
 
 export type Annot =
   | {
       id: string;
-      kind: "text";
+      kind: 'text';
       x: number;
       y: number;
       text: string;
@@ -15,7 +15,7 @@ export type Annot =
     }
   | {
       id: string;
-      kind: "rect" | "ellipse";
+      kind: 'rect' | 'ellipse';
       x: number;
       y: number;
       w: number;
@@ -26,7 +26,7 @@ export type Annot =
     }
   | {
       id: string;
-      kind: "line" | "arrow";
+      kind: 'line' | 'arrow';
       x1: number;
       y1: number;
       x2: number;
@@ -36,7 +36,7 @@ export type Annot =
     }
   | {
       id: string;
-      kind: "highlight";
+      kind: 'highlight';
       x: number;
       y: number;
       w: number;
@@ -45,14 +45,14 @@ export type Annot =
     }
   | {
       id: string;
-      kind: "ink";
+      kind: 'ink';
       points: [number, number][];
       color: string;
       width: number;
     }
   | {
       id: string;
-      kind: "image";
+      kind: 'image';
       x: number;
       y: number;
       w: number;
@@ -63,21 +63,16 @@ export type Annot =
       url?: string;
       sigId?: number;
     }
-  | { id: string; kind: "redact"; x: number; y: number; w: number; h: number };
+  | { id: string; kind: 'redact'; x: number; y: number; w: number; h: number };
 
 const n = (v: number) => (Math.round(v * 1000) / 1000).toString();
 
 export function hexToRgb(hex: string): [number, number, number] {
   const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim());
   if (!m) return [0, 0, 0];
-  return [
-    parseInt(m[1], 16) / 255,
-    parseInt(m[2], 16) / 255,
-    parseInt(m[3], 16) / 255,
-  ];
+  return [parseInt(m[1], 16) / 255, parseInt(m[2], 16) / 255, parseInt(m[3], 16) / 255];
 }
-const rgb = (hex: string, op: "rg" | "RG") =>
-  hexToRgb(hex).map(n).join(" ") + " " + op;
+const rgb = (hex: string, op: 'rg' | 'RG') => hexToRgb(hex).map(n).join(' ') + ' ' + op;
 
 /** Unicode → WinAnsi bytes as a PDF hex string (unmappable characters become '?'). */
 export function winAnsiHex(s: string): string {
@@ -110,18 +105,16 @@ export function winAnsiHex(s: string): string {
     0x017e: 0x9e,
     0x0178: 0x9f,
   };
-  let out = "<";
+  let out = '<';
   for (const ch of s) {
     const u = ch.codePointAt(0)!;
     const c = u < 0x80 || (u >= 0xa0 && u <= 0xff) ? u : (high[u] ?? 0x3f);
-    out += c.toString(16).padStart(2, "0");
+    out += c.toString(16).padStart(2, '0');
   }
-  return out + ">";
+  return out + '>';
 }
 export function winAnsiCodes(s: string): number[] {
-  return [...winAnsiHex(s).slice(1, -1).matchAll(/../g)].map((m) =>
-    parseInt(m[0], 16),
-  );
+  return [...winAnsiHex(s).slice(1, -1).matchAll(/../g)].map((m) => parseInt(m[0], 16));
 }
 export function textWidth(s: string, size: number, bold = false): number {
   const t = bold ? HELVETICA_BOLD : HELVETICA;
@@ -129,7 +122,7 @@ export function textWidth(s: string, size: number, bold = false): number {
 }
 
 /** cm operator that makes subsequent drawing use visual (as displayed) bottom-left coordinates. */
-export const frameCm = (pi: PageInfo) => `${pi.m.map(n).join(" ")} cm`;
+export const frameCm = (pi: PageInfo) => `${pi.m.map(n).join(' ')} cm`;
 
 const KAPPA = 0.5522847498;
 function ellipsePath(x: number, y: number, w: number, h: number) {
@@ -145,128 +138,84 @@ function ellipsePath(x: number, y: number, w: number, h: number) {
     `${n(cx - ox)} ${n(cy + ry)} ${n(cx - rx)} ${n(cy + oy)} ${n(cx - rx)} ${n(cy)} c`,
     `${n(cx - rx)} ${n(cy - oy)} ${n(cx - ox)} ${n(cy - ry)} ${n(cx)} ${n(cy - ry)} c`,
     `${n(cx + ox)} ${n(cy - ry)} ${n(cx + rx)} ${n(cy - oy)} ${n(cx + rx)} ${n(cy)} c`,
-  ].join("\n");
+  ].join('\n');
 }
 
 /** Build overlay content for one page. Coordinates in annots are visual points from the top-left. */
-export function annotsToOps(
-  annots: Annot[],
-  pi: PageInfo,
-): { ops: string; images: OverlayImage[] } {
+export function annotsToOps(annots: Annot[], pi: PageInfo): { ops: string; images: OverlayImage[] } {
   const H = pi.vh;
-  const out: string[] = ["q", frameCm(pi)];
+  const out: string[] = ['q', frameCm(pi)];
   const images: OverlayImage[] = [];
   for (const a of annots) {
     switch (a.kind) {
-      case "text": {
-        const lines = a.text.split("\n");
-        const font = a.bold ? "Helvetica-Bold" : "Helvetica";
-        out.push(
-          `BT /%F:${font}% ${n(a.size)} Tf ${rgb(a.color, "rg")} ${n(a.size * 1.2)} TL`,
-        );
+      case 'text': {
+        const lines = a.text.split('\n');
+        const font = a.bold ? 'Helvetica-Bold' : 'Helvetica';
+        out.push(`BT /%F:${font}% ${n(a.size)} Tf ${rgb(a.color, 'rg')} ${n(a.size * 1.2)} TL`);
         out.push(`${n(a.x)} ${n(H - a.y - a.size * 0.8)} Td`);
-        lines.forEach((l, i) =>
-          out.push(`${i ? "T* " : ""}${winAnsiHex(l)} Tj`),
-        );
-        out.push("ET");
+        lines.forEach((l, i) => out.push(`${i ? 'T* ' : ''}${winAnsiHex(l)} Tj`));
+        out.push('ET');
         break;
       }
-      case "rect":
-      case "ellipse": {
+      case 'rect':
+      case 'ellipse': {
         const y = H - a.y - a.h;
-        out.push(
-          `q ${n(a.width)} w ${rgb(a.color, "RG")}${a.fill ? " " + rgb(a.fill, "rg") : ""}`,
-        );
-        out.push(
-          a.kind === "rect"
-            ? `${n(a.x)} ${n(y)} ${n(a.w)} ${n(a.h)} re`
-            : ellipsePath(a.x, y, a.w, a.h),
-        );
-        out.push(a.fill ? "B Q" : "S Q");
+        out.push(`q ${n(a.width)} w ${rgb(a.color, 'RG')}${a.fill ? ' ' + rgb(a.fill, 'rg') : ''}`);
+        out.push(a.kind === 'rect' ? `${n(a.x)} ${n(y)} ${n(a.w)} ${n(a.h)} re` : ellipsePath(a.x, y, a.w, a.h));
+        out.push(a.fill ? 'B Q' : 'S Q');
         break;
       }
-      case "line":
-      case "arrow": {
+      case 'line':
+      case 'arrow': {
         const y1 = H - a.y1,
           y2 = H - a.y2;
-        out.push(
-          `q ${n(a.width)} w 1 J 1 j ${rgb(a.color, "RG")} ${rgb(a.color, "rg")} ${n(a.x1)} ${n(y1)} m ${n(a.x2)} ${n(y2)} l S`,
-        );
-        if (a.kind === "arrow") {
+        out.push(`q ${n(a.width)} w 1 J 1 j ${rgb(a.color, 'RG')} ${rgb(a.color, 'rg')} ${n(a.x1)} ${n(y1)} m ${n(a.x2)} ${n(y2)} l S`);
+        if (a.kind === 'arrow') {
           const ang = Math.atan2(y2 - y1, a.x2 - a.x1);
           const L = Math.max(8, a.width * 4);
-          const p1 = [
-            a.x2 - L * Math.cos(ang - 0.45),
-            y2 - L * Math.sin(ang - 0.45),
-          ];
-          const p2 = [
-            a.x2 - L * Math.cos(ang + 0.45),
-            y2 - L * Math.sin(ang + 0.45),
-          ];
-          out.push(
-            `${n(a.x2)} ${n(y2)} m ${n(p1[0])} ${n(p1[1])} l ${n(p2[0])} ${n(p2[1])} l h f`,
-          );
+          const p1 = [a.x2 - L * Math.cos(ang - 0.45), y2 - L * Math.sin(ang - 0.45)];
+          const p2 = [a.x2 - L * Math.cos(ang + 0.45), y2 - L * Math.sin(ang + 0.45)];
+          out.push(`${n(a.x2)} ${n(y2)} m ${n(p1[0])} ${n(p1[1])} l ${n(p2[0])} ${n(p2[1])} l h f`);
         }
-        out.push("Q");
+        out.push('Q');
         break;
       }
-      case "highlight":
-        out.push(
-          `q /%G:0.4:0.4:Multiply% gs ${rgb(a.color, "rg")} ${n(a.x)} ${n(H - a.y - a.h)} ${n(a.w)} ${n(a.h)} re f Q`,
-        );
+      case 'highlight':
+        out.push(`q /%G:0.4:0.4:Multiply% gs ${rgb(a.color, 'rg')} ${n(a.x)} ${n(H - a.y - a.h)} ${n(a.w)} ${n(a.h)} re f Q`);
         break;
-      case "ink": {
+      case 'ink': {
         if (a.points.length < 2) break;
         const pts = a.points.map(([x, y]) => [x, H - y]);
         const path = [`${n(pts[0][0])} ${n(pts[0][1])} m`];
-        for (let i = 1; i < pts.length; i++)
-          path.push(`${n(pts[i][0])} ${n(pts[i][1])} l`);
-        out.push(
-          `q ${n(a.width)} w 1 J 1 j ${rgb(a.color, "RG")} ${path.join(" ")} S Q`,
-        );
+        for (let i = 1; i < pts.length; i++) path.push(`${n(pts[i][0])} ${n(pts[i][1])} l`);
+        out.push(`q ${n(a.width)} w 1 J 1 j ${rgb(a.color, 'RG')} ${path.join(' ')} S Q`);
         break;
       }
-      case "image": {
+      case 'image': {
         images.push({ rgba: a.rgba, width: a.iw, height: a.ih });
-        out.push(
-          `q ${n(a.w)} 0 0 ${n(a.h)} ${n(a.x)} ${n(H - a.y - a.h)} cm /%I:${images.length - 1}% Do Q`,
-        );
+        out.push(`q ${n(a.w)} 0 0 ${n(a.h)} ${n(a.x)} ${n(H - a.y - a.h)} cm /%I:${images.length - 1}% Do Q`);
         break;
       }
-      case "redact":
+      case 'redact':
         break;
     }
   }
-  out.push("Q");
-  return { ops: out.join("\n"), images };
+  out.push('Q');
+  return { ops: out.join('\n'), images };
 }
 
 /** Visual top-left rect → PDF user-space rect [x0,y0,x1,y1]. */
-export function visualToUser(
-  pi: PageInfo,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-): number[] {
+export function visualToUser(pi: PageInfo, x: number, y: number, w: number, h: number): number[] {
   const [a, b, c, d, e, f] = pi.m;
   const pts = [
     [x, pi.vh - y],
     [x + w, pi.vh - y - h],
   ].map(([vx, vy]) => [a * vx + c * vy + e, b * vx + d * vy + f]);
-  return [
-    Math.min(pts[0][0], pts[1][0]),
-    Math.min(pts[0][1], pts[1][1]),
-    Math.max(pts[0][0], pts[1][0]),
-    Math.max(pts[0][1], pts[1][1]),
-  ];
+  return [Math.min(pts[0][0], pts[1][0]), Math.min(pts[0][1], pts[1][1]), Math.max(pts[0][0], pts[1][0]), Math.max(pts[0][1], pts[1][1])];
 }
 
 /** PDF user-space rect → visual top-left {x,y,w,h}. */
-export function userToVisual(
-  pi: PageInfo,
-  r: number[],
-): { x: number; y: number; w: number; h: number } {
+export function userToVisual(pi: PageInfo, r: number[]): { x: number; y: number; w: number; h: number } {
   const [a, b, c, d, e, f] = pi.m;
   const det = a * d - b * c || 1;
   const inv = (x: number, y: number) => {

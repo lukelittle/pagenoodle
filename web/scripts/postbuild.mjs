@@ -15,7 +15,8 @@ const walk = (d) => {
   }
 };
 walk(dist);
-const skip = (rel) => rel === 'sw.js' || rel.endsWith('.map') || /(^|\/)LICENSE/.test(rel) || rel.startsWith('vendor/pdfjs/cmaps/') && !rel.endsWith('.bcmap');
+const skip = (rel) =>
+  rel === 'sw.js' || rel.endsWith('.map') || /(^|\/)LICENSE/.test(rel) || (rel.startsWith('vendor/pdfjs/cmaps/') && !rel.endsWith('.bcmap'));
 const hash = createHash('sha256');
 hash.update(readFileSync(join(dist, 'sw.js'))); // a changed worker must get a fresh cache
 const list = [];
@@ -28,9 +29,7 @@ for (const f of files.sort()) {
 }
 const version = hash.digest('hex').slice(0, 12);
 const swPath = join(dist, 'sw.js');
-const sw = readFileSync(swPath, 'utf8')
-  .replace('__PRECACHE__', JSON.stringify(list))
-  .replace('__VERSION__', version);
+const sw = readFileSync(swPath, 'utf8').replace('__PRECACHE__', JSON.stringify(list)).replace('__VERSION__', version);
 writeFileSync(swPath, sw);
 writeFileSync(join(dist, 'version.json'), JSON.stringify({ version, files: list.length }));
 console.log(`service worker: ${list.length} files precached, version ${version}`);

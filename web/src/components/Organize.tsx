@@ -1,33 +1,13 @@
 // Organize: page thumbnails grid — reorder by drag or keyboard, rotate, delete, duplicate, extract, split.
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import {
-  useApp,
-  getState,
-  setState,
-  setPages,
-  newId,
-  withBusy,
-  exportBytes,
-  toast,
-  record,
-  type PageRef,
-} from "../store/app";
-import { thumbnail } from "../render/pdf";
-import { Icon, Dialog, Field } from "./ui";
-import { runStep, type Step } from "../pipeline/steps";
-import { downloadBlob, makeZip, safeName } from "../lib/util";
-import { celebrate, openFilePicker } from "./actions";
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useApp, getState, setState, setPages, newId, withBusy, exportBytes, toast, record, type PageRef } from '../store/app';
+import { thumbnail } from '../render/pdf';
+import { Icon, Dialog, Field } from './ui';
+import { runStep, type Step } from '../pipeline/steps';
+import { downloadBlob, makeZip, safeName } from '../lib/util';
+import { celebrate, openFilePicker } from './actions';
 
-const SRC_COLORS = [
-  "#ffb84d",
-  "#2563a6",
-  "#3a7d44",
-  "#e4572e",
-  "#9b5de5",
-  "#00a6a6",
-  "#c2185b",
-  "#6d4c41",
-];
+const SRC_COLORS = ['#ffb84d', '#2563a6', '#3a7d44', '#e4572e', '#9b5de5', '#00a6a6', '#c2185b', '#6d4c41'];
 
 export function toRangeSpec(indices: number[]): string {
   const s = [...indices].sort((a, b) => a - b);
@@ -38,21 +18,14 @@ export function toRangeSpec(indices: number[]): string {
     out.push(j > i ? `${s[i] + 1}-${s[j] + 1}` : `${s[i] + 1}`);
     i = j;
   }
-  return out.join(",") || "all";
+  return out.join(',') || 'all';
 }
 
 // one shared IntersectionObserver for lazy thumbnails
 const visibleCallbacks = new Map<Element, (v: boolean) => void>();
 let io: IntersectionObserver | null = null;
 function observe(el: Element, cb: (v: boolean) => void) {
-  if (!io)
-    io = new IntersectionObserver(
-      (entries) =>
-        entries.forEach((e) =>
-          visibleCallbacks.get(e.target)?.(e.isIntersecting),
-        ),
-      { rootMargin: "300px" },
-    );
+  if (!io) io = new IntersectionObserver((entries) => entries.forEach((e) => visibleCallbacks.get(e.target)?.(e.isIntersecting)), { rootMargin: '300px' });
   visibleCallbacks.set(el, cb);
   io.observe(el);
   return () => {
@@ -78,7 +51,7 @@ export function PageThumb({ page, width }: { page: PageRef; width: number }) {
         if (!c) return;
         c.width = bmp.width;
         c.height = bmp.height;
-        c.getContext("2d")!.drawImage(bmp, 0, 0);
+        c.getContext('2d')!.drawImage(bmp, 0, 0);
         setReady(true);
       })
       .catch(() => {});
@@ -86,11 +59,7 @@ export function PageThumb({ page, width }: { page: PageRef; width: number }) {
   }, [visible, page.src, page.index, page.rot, width]);
   return (
     <div class="canvas-wrap" ref={wrap}>
-      <canvas
-        ref={canvas}
-        style={{ display: ready ? "block" : "none" }}
-        aria-hidden="true"
-      />
+      <canvas ref={canvas} style={{ display: ready ? 'block' : 'none' }} aria-hidden="true" />
       {!ready && <div class="skeleton" />}
     </div>
   );
@@ -114,11 +83,8 @@ export function Organize() {
   const lastClick = useRef<number | null>(null);
 
   const sel = (ids: string[]) => setState({ selected: ids });
-  const targetIdx = () =>
-    selected.size
-      ? pages.map((p, i) => (selected.has(p.id) ? i : -1)).filter((i) => i >= 0)
-      : pages.map((_, i) => i);
-  const spec = () => (selected.size ? toRangeSpec(targetIdx()) : "all");
+  const targetIdx = () => (selected.size ? pages.map((p, i) => (selected.has(p.id) ? i : -1)).filter((i) => i >= 0) : pages.map((_, i) => i));
+  const spec = () => (selected.size ? toRangeSpec(targetIdx()) : 'all');
 
   const doStep = async (step: Step, label: string) => {
     await withBusy(label, async (ctx) => {
@@ -126,17 +92,15 @@ export function Organize() {
       record(step);
     });
   };
-  const rotate = (angle: number) =>
-    doStep({ op: "rotate", pages: spec(), angle }, "Twirling pages…");
+  const rotate = (angle: number) => doStep({ op: 'rotate', pages: spec(), angle }, 'Twirling pages…');
   const remove = () => {
-    if (!selected.size)
-      return toast("Select some pages first (click, or Space on a page).");
-    void doStep({ op: "delete", pages: spec() }, "Removing pages…");
+    if (!selected.size) return toast('Select some pages first (click, or Space on a page).');
+    void doStep({ op: 'delete', pages: spec() }, 'Removing pages…');
     sel([]);
   };
   const duplicate = () => {
     const idx = targetIdx();
-    if (!selected.size) return toast("Select pages to duplicate.");
+    if (!selected.size) return toast('Select pages to duplicate.');
     const out: PageRef[] = [];
     pages.forEach((p, i) => {
       out.push(p);
@@ -145,14 +109,11 @@ export function Organize() {
     setPages(out);
   };
   const extract = async () => {
-    if (!selected.size) return toast("Select the pages you want to extract.");
+    if (!selected.size) return toast('Select the pages you want to extract.');
     const chosen = pages.filter((p) => selected.has(p.id));
-    await withBusy("Extracting pages…", async (ctx) => {
+    await withBusy('Extracting pages…', async (ctx) => {
       const bytes = await exportBytes(ctx, chosen);
-      downloadBlob(
-        bytes,
-        `${safeName(getState().baseName)}-pages-${toRangeSpec(targetIdx())}.pdf`,
-      );
+      downloadBlob(bytes, `${safeName(getState().baseName)}-pages-${toRangeSpec(targetIdx())}.pdf`);
       celebrate();
     });
   };
@@ -193,44 +154,30 @@ export function Organize() {
       e.preventDefault();
       if (e.altKey) {
         const ids = selected.has(p.id) ? st.selected : [p.id];
-        const to = Math.max(
-          0,
-          Math.min(pages.length, i + delta + (delta > 0 ? 1 : 0)),
-        );
+        const to = Math.max(0, Math.min(pages.length, i + delta + (delta > 0 ? 1 : 0)));
         const res = move(ids, to);
         const ni = res.findIndex((x) => x.id === p.id);
         setTimeout(() => focusAt(ni));
         announce(`Moved to position ${ni + 1} of ${pages.length}`);
       } else {
         focusAt(i + delta);
-        if (e.shiftKey)
-          sel([
-            ...new Set([
-              ...st.selected,
-              p.id,
-              pages[Math.max(0, Math.min(pages.length - 1, i + delta))].id,
-            ]),
-          ]);
+        if (e.shiftKey) sel([...new Set([...st.selected, p.id, pages[Math.max(0, Math.min(pages.length - 1, i + delta))].id])]);
       }
-    } else if (e.key === " " || e.key === "Enter") {
+    } else if (e.key === ' ' || e.key === 'Enter') {
       e.preventDefault();
-      sel(
-        selected.has(p.id)
-          ? st.selected.filter((x) => x !== p.id)
-          : [...st.selected, p.id],
-      );
-    } else if (e.key === "Delete" || e.key === "Backspace") {
+      sel(selected.has(p.id) ? st.selected.filter((x) => x !== p.id) : [...st.selected, p.id]);
+    } else if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
       if (!selected.size) sel([p.id]);
       setTimeout(remove);
-    } else if (e.key.toLowerCase() === "r") {
+    } else if (e.key.toLowerCase() === 'r') {
       e.preventDefault();
       if (!selected.size) sel([p.id]);
       setTimeout(() => rotate(e.shiftKey ? -90 : 90));
-    } else if (e.key === "Home") focusAt(0);
-    else if (e.key === "End") focusAt(pages.length - 1);
+    } else if (e.key === 'Home') focusAt(0);
+    else if (e.key === 'End') focusAt(pages.length - 1);
   };
-  const [live, setLive] = useState("");
+  const [live, setLive] = useState('');
   const announce = (t: string) => setLive(t);
 
   // ---------- pointer drag ----------
@@ -242,7 +189,7 @@ export function Organize() {
     pointer: number;
   } | null>(null);
   const onPointerDown = (e: PointerEvent, p: PageRef) => {
-    if ((e.target as HTMLElement).closest("button") || e.button !== 0) return;
+    if ((e.target as HTMLElement).closest('button') || e.button !== 0) return;
     dragState.current = {
       id: p.id,
       x: e.clientX,
@@ -265,21 +212,14 @@ export function Organize() {
       let after = false;
       [...g.children].forEach((ch, i) => {
         const r = ch.getBoundingClientRect();
-        if (
-          e.clientX >= r.left - 8 &&
-          e.clientX <= r.right + 8 &&
-          e.clientY >= r.top &&
-          e.clientY <= r.bottom
-        ) {
+        if (e.clientX >= r.left - 8 && e.clientX <= r.right + 8 && e.clientY >= r.top && e.clientY <= r.bottom) {
           over = i;
           after = e.clientX > r.left + r.width / 2;
         }
       });
       const st2 = getState();
       const ids = st2.selected.includes(d.id) ? st2.selected : [d.id];
-      setDrag(
-        over >= 0 ? { ids, over, after } : { ids, over: -1, after: false },
-      );
+      setDrag(over >= 0 ? { ids, over, after } : { ids, over: -1, after: false });
       // auto-scroll near edges
       if (e.clientY < 80) window.scrollBy(0, -12);
       else if (e.clientY > window.innerHeight - 60) window.scrollBy(0, 12);
@@ -290,35 +230,26 @@ export function Organize() {
       setDrag((cur) => {
         if (d?.started && cur && cur.over >= 0) {
           move(cur.ids, cur.over + (cur.after ? 1 : 0));
-          toast(`Moved ${cur.ids.length} page${cur.ids.length > 1 ? "s" : ""}`);
+          toast(`Moved ${cur.ids.length} page${cur.ids.length > 1 ? 's' : ''}`);
         }
         return null;
       });
     };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
     return () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
     };
   });
 
   const onClick = (e: MouseEvent, i: number) => {
     const p = pages[i];
     if (e.shiftKey && lastClick.current !== null) {
-      const [a, b] = [
-        Math.min(lastClick.current, i),
-        Math.max(lastClick.current, i),
-      ];
-      sel([
-        ...new Set([...st.selected, ...pages.slice(a, b + 1).map((x) => x.id)]),
-      ]);
+      const [a, b] = [Math.min(lastClick.current, i), Math.max(lastClick.current, i)];
+      sel([...new Set([...st.selected, ...pages.slice(a, b + 1).map((x) => x.id)])]);
     } else if (e.metaKey || e.ctrlKey) {
-      sel(
-        selected.has(p.id)
-          ? st.selected.filter((x) => x !== p.id)
-          : [...st.selected, p.id],
-      );
+      sel(selected.has(p.id) ? st.selected.filter((x) => x !== p.id) : [...st.selected, p.id]);
     } else sel(selected.has(p.id) && st.selected.length === 1 ? [] : [p.id]);
     lastClick.current = i;
     setFocusIdx(i);
@@ -331,19 +262,10 @@ export function Organize() {
           <Icon name="plus" /> Add files
         </button>
         <span class="sep" />
-        <button
-          class="btn"
-          onClick={() =>
-            sel(selected.size === pages.length ? [] : pages.map((p) => p.id))
-          }
-        >
-          {selected.size === pages.length ? "Select none" : "Select all"}
+        <button class="btn" onClick={() => sel(selected.size === pages.length ? [] : pages.map((p) => p.id))}>
+          {selected.size === pages.length ? 'Select none' : 'Select all'}
         </button>
-        <button
-          class="btn"
-          onClick={() => rotate(-90)}
-          title="Rotate left (Shift+R)"
-        >
+        <button class="btn" onClick={() => rotate(-90)} title="Rotate left (Shift+R)">
           <Icon name="rotl" /> <span>Rotate left</span>
         </button>
         <button class="btn" onClick={() => rotate(90)} title="Rotate right (R)">
@@ -361,58 +283,27 @@ export function Organize() {
         <button class="btn" onClick={() => setSplitOpen(true)}>
           <Icon name="scissors" /> Split…
         </button>
-        <button
-          class="btn"
-          onClick={() => doStep({ op: "reverse" }, "Reversing…")}
-        >
+        <button class="btn" onClick={() => doStep({ op: 'reverse' }, 'Reversing…')}>
           <Icon name="reverse" /> Reverse
         </button>
         <span class="grow" />
-        <label
-          class="hint"
-          style={{ display: "flex", gap: 6, alignItems: "center" }}
-        >
+        <label class="hint" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           Size
-          <input
-            type="range"
-            min={90}
-            max={320}
-            value={size}
-            onInput={(e) => setSize(+(e.target as HTMLInputElement).value)}
-            aria-label="Thumbnail size"
-          />
+          <input type="range" min={90} max={320} value={size} onInput={(e) => setSize(+(e.target as HTMLInputElement).value)} aria-label="Thumbnail size" />
         </label>
       </div>
-      <p class="hint" style={{ margin: "-6px 0 12px" }}>
-        {pages.length} page{pages.length === 1 ? "" : "s"}
-        {multiSource
-          ? ` from ${srcOrder.length} files — they'll be merged in this order`
-          : ""}
-        . Drag to reorder, or use <kbd>Alt</kbd>+<kbd>←</kbd>/<kbd>→</kbd>.{" "}
-        <kbd>Space</kbd> selects, <kbd>R</kbd> rotates, <kbd>Del</kbd> deletes.
+      <p class="hint" style={{ margin: '-6px 0 12px' }}>
+        {pages.length} page{pages.length === 1 ? '' : 's'}
+        {multiSource ? ` from ${srcOrder.length} files — they'll be merged in this order` : ''}. Drag to reorder, or use <kbd>Alt</kbd>+<kbd>←</kbd>/
+        <kbd>→</kbd>. <kbd>Space</kbd> selects, <kbd>R</kbd> rotates, <kbd>Del</kbd> deletes.
       </p>
       <div class="sr-only" aria-live="assertive">
         {live}
       </div>
-      <ul
-        class="grid"
-        ref={gridRef}
-        role="listbox"
-        aria-multiselectable="true"
-        aria-label="Pages"
-        style={{ "--thumb": `${size}px` } as Record<string, string>}
-      >
+      <ul class="grid" ref={gridRef} role="listbox" aria-multiselectable="true" aria-label="Pages" style={{ '--thumb': `${size}px` } as Record<string, string>}>
         {pages.map((p, i) => {
           const isDragSrc = drag?.ids.includes(p.id);
-          const cls = [
-            "thumb",
-            isDragSrc ? "drag-src" : "",
-            drag && drag.over === i
-              ? drag.after
-                ? "drop-after"
-                : "drop-before"
-              : "",
-          ].join(" ");
+          const cls = ['thumb', isDragSrc ? 'drag-src' : '', drag && drag.over === i ? (drag.after ? 'drop-after' : 'drop-before') : ''].join(' ');
           const color = SRC_COLORS[srcOrder.indexOf(p.src) % SRC_COLORS.length];
           return (
             <li
@@ -420,26 +311,18 @@ export function Organize() {
               class={cls}
               role="option"
               aria-selected={selected.has(p.id)}
-              aria-label={`Page ${i + 1}${p.rot ? `, rotated ${p.rot}°` : ""}${multiSource ? `, from ${sources[p.src]?.name}` : ""}`}
+              aria-label={`Page ${i + 1}${p.rot ? `, rotated ${p.rot}°` : ''}${multiSource ? `, from ${sources[p.src]?.name}` : ''}`}
               tabIndex={i === focusIdx ? 0 : -1}
               onKeyDown={(e) => onKey(e as unknown as KeyboardEvent, i)}
               onClick={(e) => onClick(e as unknown as MouseEvent, i)}
-              onPointerDown={(e) =>
-                onPointerDown(e as unknown as PointerEvent, p)
-              }
+              onPointerDown={(e) => onPointerDown(e as unknown as PointerEvent, p)}
               onFocus={() => setFocusIdx(i)}
               data-testid="page-thumb"
             >
               <PageThumb page={p} width={size} />
               <div class="label">
                 <span>
-                  {multiSource && (
-                    <span
-                      class="src-dot"
-                      style={{ background: color }}
-                      title={sources[p.src]?.name}
-                    />
-                  )}
+                  {multiSource && <span class="src-dot" style={{ background: color }} title={sources[p.src]?.name} />}
                   <span class="num">{i + 1}</span>
                 </span>
                 {p.rot ? <span>{p.rot}°</span> : null}
@@ -448,24 +331,14 @@ export function Organize() {
                 <button
                   aria-label={`Rotate page ${i + 1}`}
                   title="Rotate"
-                  onClick={() =>
-                    setPages(
-                      pages.map((x) =>
-                        x.id === p.id ? { ...x, rot: (x.rot + 90) % 360 } : x,
-                      ),
-                    )
-                  }
+                  onClick={() => setPages(pages.map((x) => (x.id === p.id ? { ...x, rot: (x.rot + 90) % 360 } : x)))}
                 >
                   <Icon name="rotr" />
                 </button>
                 <button
                   aria-label={`Delete page ${i + 1}`}
                   title="Delete"
-                  onClick={() =>
-                    pages.length > 1
-                      ? setPages(pages.filter((x) => x.id !== p.id))
-                      : toast("A PDF needs at least one page!")
-                  }
+                  onClick={() => (pages.length > 1 ? setPages(pages.filter((x) => x.id !== p.id)) : toast('A PDF needs at least one page!'))}
                 >
                   <Icon name="trash" />
                 </button>
@@ -481,14 +354,13 @@ export function Organize() {
 
 function SplitDialog({ onClose }: { onClose: () => void }) {
   const st = getState();
-  const [mode, setMode] = useState<"every" | "ranges">("every");
+  const [mode, setMode] = useState<'every' | 'ranges'>('every');
   const [every, setEvery] = useState(1);
-  const [ranges, setRanges] = useState("1-2, 3-");
+  const [ranges, setRanges] = useState('1-2, 3-');
   const run = async () => {
     onClose();
-    const step: Step =
-      mode === "every" ? { op: "split", every } : { op: "split", ranges };
-    await withBusy("Splitting…", async (ctx) => {
+    const step: Step = mode === 'every' ? { op: 'split', every } : { op: 'split', ranges };
+    await withBusy('Splitting…', async (ctx) => {
       const out = await runStep(step, ctx);
       record(step);
       await downloadParts(out.parts ?? [], ctx);
@@ -511,59 +383,28 @@ function SplitDialog({ onClose }: { onClose: () => void }) {
     >
       <div class="radio-row" role="radiogroup" aria-label="Split mode">
         <label>
-          <input
-            type="radio"
-            name="mode"
-            checked={mode === "every"}
-            onChange={() => setMode("every")}
-          />
+          <input type="radio" name="mode" checked={mode === 'every'} onChange={() => setMode('every')} />
           <span>Every N pages</span>
         </label>
         <label>
-          <input
-            type="radio"
-            name="mode"
-            checked={mode === "ranges"}
-            onChange={() => setMode("ranges")}
-          />
+          <input type="radio" name="mode" checked={mode === 'ranges'} onChange={() => setMode('ranges')} />
           <span>By page ranges</span>
         </label>
       </div>
-      {mode === "every" ? (
-        <Field
-          label="Pages per file"
-          hint={`Makes ${Math.ceil(st.doc.pages.length / Math.max(1, every))} files.`}
-        >
-          <input
-            type="number"
-            min={1}
-            max={st.doc.pages.length}
-            value={every}
-            onInput={(e) =>
-              setEvery(Math.max(1, +(e.target as HTMLInputElement).value))
-            }
-          />
+      {mode === 'every' ? (
+        <Field label="Pages per file" hint={`Makes ${Math.ceil(st.doc.pages.length / Math.max(1, every))} files.`}>
+          <input type="number" min={1} max={st.doc.pages.length} value={every} onInput={(e) => setEvery(Math.max(1, +(e.target as HTMLInputElement).value))} />
         </Field>
       ) : (
-        <Field
-          label="Ranges (one file per comma group)"
-          hint="Example: 1-3, 4-6, 7-  (a trailing dash means “to the end”)"
-        >
-          <input
-            type="text"
-            value={ranges}
-            onInput={(e) => setRanges((e.target as HTMLInputElement).value)}
-          />
+        <Field label="Ranges (one file per comma group)" hint="Example: 1-3, 4-6, 7-  (a trailing dash means “to the end”)">
+          <input type="text" value={ranges} onInput={(e) => setRanges((e.target as HTMLInputElement).value)} />
         </Field>
       )}
     </Dialog>
   );
 }
 
-export async function downloadParts(
-  parts: { name: string; pages: PageRef[] }[],
-  ctx: { onProgress?: (d: number, t: number) => void; signal?: AbortSignal },
-) {
+export async function downloadParts(parts: { name: string; pages: PageRef[] }[], ctx: { onProgress?: (d: number, t: number) => void; signal?: AbortSignal }) {
   const base = safeName(getState().baseName);
   const files: { name: string; data: Uint8Array }[] = [];
   for (let i = 0; i < parts.length; i++) {
@@ -574,10 +415,7 @@ export async function downloadParts(
     });
   }
   if (files.length === 1) downloadBlob(files[0].data, files[0].name);
-  else downloadBlob(makeZip(files), `${base}-split.zip`, "application/zip");
+  else downloadBlob(makeZip(files), `${base}-split.zip`, 'application/zip');
   celebrate();
-  toast(
-    `Made ${files.length} file${files.length > 1 ? "s" : ""} ✂️`,
-    "success",
-  );
+  toast(`Made ${files.length} file${files.length > 1 ? 's' : ''} ✂️`, 'success');
 }

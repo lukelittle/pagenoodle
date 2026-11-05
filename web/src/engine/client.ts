@@ -1,22 +1,11 @@
 // Main-thread client for the engine worker. Heavy work never blocks the UI; any call can be
 // cancelled — cancelling terminates the worker and a fresh one is started transparently.
-import type {
-  DocInfo,
-  EditOp,
-  EditResult,
-  FormField,
-  ImageSpec,
-  PageSizeMode,
-  Part,
-  SearchHit,
-  Word,
-  WorkerResponse,
-} from "./types";
+import type { DocInfo, EditOp, EditResult, FormField, ImageSpec, PageSizeMode, Part, SearchHit, Word, WorkerResponse } from './types';
 
 export class CancelledError extends Error {
   constructor() {
-    super("Cancelled");
-    this.name = "CancelledError";
+    super('Cancelled');
+    this.name = 'CancelledError';
   }
 }
 
@@ -42,28 +31,27 @@ class EngineClient {
 
   private start(): Promise<void> {
     if (this.ready) return this.ready;
-    this.worker = new Worker(new URL("./engine.worker.ts", import.meta.url), {
-      type: "module",
-      name: "noodle-engine",
+    this.worker = new Worker(new URL('./engine.worker.ts', import.meta.url), {
+      type: 'module',
+      name: 'noodle-engine',
     });
     this.worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
       const msg = e.data;
       const p = this.pending.get(msg.id);
       if (!p) return;
-      if (msg.type === "progress") p.onProgress?.(msg.done, msg.total);
+      if (msg.type === 'progress') p.onProgress?.(msg.done, msg.total);
       else {
         this.pending.delete(msg.id);
-        if (msg.type === "result") p.resolve(msg.value);
+        if (msg.type === 'result') p.resolve(msg.value);
         else p.reject(new Error(msg.message));
       }
     };
     this.worker.onerror = (e) => {
-      for (const p of this.pending.values())
-        p.reject(new Error(e.message || "Engine crashed"));
+      for (const p of this.pending.values()) p.reject(new Error(e.message || 'Engine crashed'));
       this.pending.clear();
       this.reset();
     };
-    this.ready = this.raw("init", [document.baseURI]) as Promise<void>;
+    this.ready = this.raw('init', [document.baseURI]) as Promise<void>;
     return this.ready;
   }
 
@@ -81,48 +69,35 @@ class EngineClient {
     this.reset();
   }
 
-  private raw(
-    method: string,
-    args: unknown[],
-    opts: CallOptions = {},
-  ): Promise<unknown> {
+  private raw(method: string, args: unknown[], opts: CallOptions = {}): Promise<unknown> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       if (opts.signal?.aborted) return reject(new CancelledError());
       this.pending.set(id, { resolve, reject, onProgress: opts.onProgress });
-      opts.signal?.addEventListener("abort", () => this.cancelAll(), {
+      opts.signal?.addEventListener('abort', () => this.cancelAll(), {
         once: true,
       });
       this.worker!.postMessage({ id, method, args });
     });
   }
 
-  private async call<T>(
-    method: string,
-    args: unknown[],
-    keys: string[] = [],
-    opts: CallOptions = {},
-  ): Promise<T> {
+  private async call<T>(method: string, args: unknown[], keys: string[] = [], opts: CallOptions = {}): Promise<T> {
     await this.start();
     for (const k of new Set(keys)) {
       if (this.loaded.has(k)) continue;
       const bytes = this.registry.get(k);
       if (!bytes) throw new Error(`Unknown document ${k}`);
-      await this.raw("load", [k, bytes]);
+      await this.raw('load', [k, bytes]);
       this.loaded.add(k);
     }
     return (await this.raw(method, args, opts)) as T;
   }
 
   /** Register a document and return its parsed info. */
-  async open(
-    key: string,
-    bytes: Uint8Array,
-    opts?: CallOptions,
-  ): Promise<DocInfo> {
+  async open(key: string, bytes: Uint8Array, opts?: CallOptions): Promise<DocInfo> {
     await this.start();
     this.registry.set(key, bytes);
-    const info = (await this.raw("load", [key, bytes], opts)) as DocInfo;
+    const info = (await this.raw('load', [key, bytes], opts)) as DocInfo;
     this.loaded.add(key);
     return info;
   }
@@ -131,63 +106,45 @@ class EngineClient {
     this.registry.delete(key);
     if (this.loaded.has(key)) {
       this.loaded.delete(key);
-      void this.raw("drop", [key]).catch(() => {});
+      void this.raw('drop', [key]).catch(() => {});
     }
   }
 
   assemble(parts: Part[], flags: number, opts?: CallOptions) {
     return this.call<Uint8Array>(
-      "assemble",
+      'assemble',
       [parts, flags],
       parts.map((p) => p.key),
       opts,
     );
   }
   edit(key: string, ops: EditOp[], flags: number, opts?: CallOptions) {
-    return this.call<EditResult>("edit", [key, ops, flags], [key], opts);
+    return this.call<EditResult>('edit', [key, ops, flags], [key], opts);
   }
   text(key: string, page: number) {
-    return this.call<{ text: string; words: Word[] }>(
-      "text",
-      [key, page],
-      [key],
-    );
+    return this.call<{ text: string; words: Word[] }>('text', [key, page], [key]);
   }
   textAll(key: string, opts?: CallOptions) {
-    return this.call<string[]>("textAll", [key], [key], opts);
+    return this.call<string[]>('textAll', [key], [key], opts);
   }
   search(key: string, needle: string, opts?: CallOptions) {
-    return this.call<SearchHit[]>("search", [key, needle], [key], opts);
+    return this.call<SearchHit[]>('search', [key, needle], [key], opts);
   }
   forms(key: string) {
-    return this.call<FormField[]>("forms", [key], [key]);
+    return this.call<FormField[]>('forms', [key], [key]);
   }
-  verify(
-    bytes: Uint8Array,
-    items: { page: number; rects: number[][] }[],
-    terms: string[],
-  ) {
+  verify(bytes: Uint8Array, items: { page: number; rects: number[][] }[], terms: string[]) {
     return this.call<{
       remaining: number;
       leaked: string;
       stillFound: string[];
-    }>("verify", [bytes, items, terms]);
+    }>('verify', [bytes, items, terms]);
   }
-  imagesToPdf(
-    specs: ImageSpec[],
-    mode: PageSizeMode,
-    margin: number,
-    opts?: CallOptions,
-  ) {
-    return this.call<Uint8Array>(
-      "imagesToPdf",
-      [specs, mode, margin],
-      [],
-      opts,
-    );
+  imagesToPdf(specs: ImageSpec[], mode: PageSizeMode, margin: number, opts?: CallOptions) {
+    return this.call<Uint8Array>('imagesToPdf', [specs, mode, margin], [], opts);
   }
   version() {
-    return this.call<string>("version", []);
+    return this.call<string>('version', []);
   }
 }
 

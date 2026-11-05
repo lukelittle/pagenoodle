@@ -1,59 +1,48 @@
 // Recipes: record a sequence of steps, save locally (SQLite), replay in one click, export/import JSON.
-import { useEffect, useState } from "preact/hooks";
-import { useApp, setState, withBusy, toast, getState } from "../store/app";
-import { db, type RecipeRow } from "../store/db";
-import { describeStep, runStep, type Step } from "../pipeline/steps";
-import { Icon, Dialog, Field } from "./ui";
-import { downloadBlob, safeName } from "../lib/util";
-import { downloadParts } from "./Organize";
-import { downloadCurrent } from "./actions";
+import { useEffect, useState } from 'preact/hooks';
+import { useApp, setState, withBusy, toast, getState } from '../store/app';
+import { db, type RecipeRow } from '../store/db';
+import { describeStep, runStep, type Step } from '../pipeline/steps';
+import { Icon, Dialog, Field } from './ui';
+import { downloadBlob, safeName } from '../lib/util';
+import { downloadParts } from './Organize';
+import { downloadCurrent } from './actions';
 
-const KNOWN: Step["op"][] = [
-  "merge",
-  "rotate",
-  "delete",
-  "keep",
-  "reverse",
-  "split",
-  "compress",
-  "stripMetadata",
-  "stamp",
-  "redactText",
-  "sign",
-  "flattenForms",
-  "ocr",
+const KNOWN: Step['op'][] = [
+  'merge',
+  'rotate',
+  'delete',
+  'keep',
+  'reverse',
+  'split',
+  'compress',
+  'stripMetadata',
+  'stamp',
+  'redactText',
+  'sign',
+  'flattenForms',
+  'ocr',
 ];
 
 export function validateRecipe(obj: unknown): { name: string; steps: Step[] } {
   const o = obj as { pagenoodle?: string; name?: unknown; steps?: unknown };
-  if (!o || typeof o !== "object" || o.pagenoodle !== "recipe")
-    throw new Error("That file isn't a Pagenoodle recipe.");
-  if (!Array.isArray(o.steps) || !o.steps.length)
-    throw new Error("This recipe has no steps.");
+  if (!o || typeof o !== 'object' || o.pagenoodle !== 'recipe') throw new Error("That file isn't a Pagenoodle recipe.");
+  if (!Array.isArray(o.steps) || !o.steps.length) throw new Error('This recipe has no steps.');
   for (const s of o.steps)
-    if (!s || typeof s !== "object" || !KNOWN.includes((s as Step).op))
-      throw new Error(`Unknown step: ${JSON.stringify(s).slice(0, 60)}`);
+    if (!s || typeof s !== 'object' || !KNOWN.includes((s as Step).op)) throw new Error(`Unknown step: ${JSON.stringify(s).slice(0, 60)}`);
   return {
-    name:
-      typeof o.name === "string" && o.name.trim()
-        ? o.name.trim().slice(0, 80)
-        : "Imported recipe",
+    name: typeof o.name === 'string' && o.name.trim() ? o.name.trim().slice(0, 80) : 'Imported recipe',
     steps: o.steps as Step[],
   };
 }
 
 export function recipeJson(name: string, steps: Step[]) {
-  return JSON.stringify(
-    { pagenoodle: "recipe", version: 1, name, steps },
-    null,
-    2,
-  );
+  return JSON.stringify({ pagenoodle: 'recipe', version: 1, name, steps }, null, 2);
 }
 
 export async function runRecipe(name: string, steps: Step[]) {
-  if (!getState().doc.pages.length)
-    return toast("Open the files to cook first, then run the recipe.");
-  let parts: Awaited<ReturnType<typeof runStep>>["parts"];
+  if (!getState().doc.pages.length) return toast('Open the files to cook first, then run the recipe.');
+  let parts: Awaited<ReturnType<typeof runStep>>['parts'];
   const ok = await withBusy(`Cooking “${name}”…`, async (ctx) => {
     for (let i = 0; i < steps.length; i++) {
       setState((s) => ({
@@ -78,52 +67,52 @@ export async function runRecipe(name: string, steps: Step[]) {
 
 const TEMPLATES: { label: string; step: Step }[] = [
   {
-    label: "Rotate all pages 90°",
-    step: { op: "rotate", pages: "all", angle: 90 },
+    label: 'Rotate all pages 90°',
+    step: { op: 'rotate', pages: 'all', angle: 90 },
   },
-  { label: "Delete first page", step: { op: "delete", pages: "1" } },
-  { label: "Reverse page order", step: { op: "reverse" } },
+  { label: 'Delete first page', step: { op: 'delete', pages: '1' } },
+  { label: 'Reverse page order', step: { op: 'reverse' } },
   {
-    label: "Add page numbers",
+    label: 'Add page numbers',
     step: {
-      op: "stamp",
-      template: "Page {n} of {total}",
+      op: 'stamp',
+      template: 'Page {n} of {total}',
       position: 4,
       size: 10,
       margin: 24,
       start: 1,
-      pages: "all",
-      font: "Helvetica",
+      pages: 'all',
+      font: 'Helvetica',
       color: 0x333333,
     },
   },
   {
-    label: "Stamp “CONFIDENTIAL” header",
+    label: 'Stamp “CONFIDENTIAL” header',
     step: {
-      op: "stamp",
-      template: "CONFIDENTIAL",
+      op: 'stamp',
+      template: 'CONFIDENTIAL',
       position: 1,
       size: 12,
       margin: 20,
       start: 1,
-      pages: "all",
-      font: "Helvetica-Bold",
+      pages: 'all',
+      font: 'Helvetica-Bold',
       color: 0xc8381f,
     },
   },
-  { label: "Compress (balanced)", step: { op: "compress", level: "balanced" } },
-  { label: "Strip metadata", step: { op: "stripMetadata" } },
-  { label: "OCR scanned pages", step: { op: "ocr", skipText: true } },
-  { label: "Flatten forms", step: { op: "flattenForms" } },
-  { label: "Split every page", step: { op: "split", every: 1 } },
+  { label: 'Compress (balanced)', step: { op: 'compress', level: 'balanced' } },
+  { label: 'Strip metadata', step: { op: 'stripMetadata' } },
+  { label: 'OCR scanned pages', step: { op: 'ocr', skipText: true } },
+  { label: 'Flatten forms', step: { op: 'flattenForms' } },
+  { label: 'Split every page', step: { op: 'split', every: 1 } },
 ];
 
 export function Recipes() {
   const st = useApp();
   const [rows, setRows] = useState<RecipeRow[]>([]);
-  const [mode, setMode] = useState("");
+  const [mode, setMode] = useState('');
   const [naming, setNaming] = useState<Step[] | null>(null);
-  const [name, setName] = useState("My recipe");
+  const [name, setName] = useState('My recipe');
   const [editing, setEditing] = useState<RecipeRow | null>(null);
   const load = () =>
     db
@@ -137,7 +126,7 @@ export function Recipes() {
 
   const save = async (steps: Step[], nm: string, id?: number) => {
     await db.saveRecipe({ id, name: nm, steps: JSON.stringify(steps) });
-    toast(`Recipe “${nm}” saved on this device 📒`, "success");
+    toast(`Recipe “${nm}” saved on this device 📒`, 'success');
     void load();
   };
   const importFile = async (f: File) => {
@@ -145,24 +134,20 @@ export function Recipes() {
       const r = validateRecipe(JSON.parse(await f.text()));
       await save(r.steps, r.name);
     } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), "error");
+      toast(e instanceof Error ? e.message : String(e), 'error');
     }
   };
 
   return (
     <div class="view">
-      <div
-        class="cards"
-        style={{ gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))" }}
-      >
+      <div class="cards" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))' }}>
         <section class="card" aria-labelledby="rec-h">
           <h2 id="rec-h">
             <Icon name="record" /> Record a recipe
           </h2>
           <p>
-            Hit record, then do your usual routine (merge, compress, number,
-            sign…). Pagenoodle writes down each step so you can replay it on new
-            files in one click.
+            Hit record, then do your usual routine (merge, compress, number, sign…). Pagenoodle writes down each step so you can replay it on new files in one
+            click.
           </p>
           {st.recording ? (
             <>
@@ -170,9 +155,7 @@ export function Recipes() {
                 {st.recording.map((s, i) => (
                   <li key={i}>{describeStep(s)}</li>
                 ))}
-                {!st.recording.length && (
-                  <li class="hint">Waiting for your first step…</li>
-                )}
+                {!st.recording.length && <li class="hint">Waiting for your first step…</li>}
               </ol>
               <div class="actions">
                 <button
@@ -181,26 +164,19 @@ export function Recipes() {
                     const steps = st.recording ?? [];
                     setState({ recording: null });
                     if (steps.length) setNaming(steps);
-                    else toast("Nothing recorded.");
+                    else toast('Nothing recorded.');
                   }}
                 >
                   <Icon name="stop" /> Stop &amp; save
                 </button>
-                <button
-                  class="btn"
-                  onClick={() => setState({ recording: null })}
-                >
+                <button class="btn" onClick={() => setState({ recording: null })}>
                   Discard
                 </button>
               </div>
             </>
           ) : (
             <div class="actions">
-              <button
-                class="btn primary"
-                onClick={() => setState({ recording: [] })}
-                data-testid="start-recording"
-              >
+              <button class="btn primary" onClick={() => setState({ recording: [] })} data-testid="start-recording">
                 <Icon name="record" /> Start recording
               </button>
               <button class="btn" onClick={() => setNaming([])}>
@@ -214,7 +190,7 @@ export function Recipes() {
                   class="sr-only"
                   onChange={(e) => {
                     const f = (e.target as HTMLInputElement).files?.[0];
-                    (e.target as HTMLInputElement).value = "";
+                    (e.target as HTMLInputElement).value = '';
                     if (f) void importFile(f);
                   }}
                 />
@@ -222,13 +198,8 @@ export function Recipes() {
             </div>
           )}
           <p class="hint">
-            Stored in{" "}
-            {mode === "opfs"
-              ? "SQLite on your device (OPFS)"
-              : mode === "indexeddb"
-                ? "SQLite, saved to IndexedDB on your device"
-                : mode || "…"}{" "}
-            — never uploaded.
+            Stored in {mode === 'opfs' ? 'SQLite on your device (OPFS)' : mode === 'indexeddb' ? 'SQLite, saved to IndexedDB on your device' : mode || '…'} —
+            never uploaded.
           </p>
         </section>
         {rows.map((r) => {
@@ -239,35 +210,21 @@ export function Recipes() {
             /* ignore */
           }
           return (
-            <section
-              class="card"
-              key={r.id}
-              aria-label={`Recipe ${r.name}`}
-              data-testid="recipe-card"
-            >
+            <section class="card" key={r.id} aria-label={`Recipe ${r.name}`} data-testid="recipe-card">
               <h2>📒 {r.name}</h2>
-              <ol style={{ margin: "4px 0", paddingLeft: 20 }}>
+              <ol style={{ margin: '4px 0', paddingLeft: 20 }}>
                 {steps.map((s, i) => (
                   <li key={i}>{describeStep(s)}</li>
                 ))}
               </ol>
               <div class="actions">
-                <button
-                  class="btn primary"
-                  onClick={() => runRecipe(r.name, steps)}
-                  disabled={!st.doc.pages.length}
-                  data-testid="run-recipe"
-                >
+                <button class="btn primary" onClick={() => runRecipe(r.name, steps)} disabled={!st.doc.pages.length} data-testid="run-recipe">
                   <Icon name="play" /> Run on open files
                 </button>
                 <button
                   class="btn"
                   onClick={() =>
-                    downloadBlob(
-                      new TextEncoder().encode(recipeJson(r.name, steps)),
-                      `${safeName(r.name)}.pagenoodle-recipe.json`,
-                      "application/json",
-                    )
+                    downloadBlob(new TextEncoder().encode(recipeJson(r.name, steps)), `${safeName(r.name)}.pagenoodle-recipe.json`, 'application/json')
                   }
                 >
                   <Icon name="download" /> Export
@@ -357,14 +314,14 @@ function RecipeEditor({
                 const finalSteps =
                   json !== null
                     ? validateRecipe({
-                        pagenoodle: "recipe",
+                        pagenoodle: 'recipe',
                         steps: JSON.parse(json),
                       }).steps
                     : steps;
-                if (!finalSteps.length) return toast("Add at least one step.");
-                onSave(name.trim() || "My recipe", finalSteps);
+                if (!finalSteps.length) return toast('Add at least one step.');
+                onSave(name.trim() || 'My recipe', finalSteps);
               } catch (e) {
-                toast(e instanceof Error ? e.message : String(e), "error");
+                toast(e instanceof Error ? e.message : String(e), 'error');
               }
             }}
           >
@@ -374,12 +331,7 @@ function RecipeEditor({
       }
     >
       <Field label="Name">
-        <input
-          type="text"
-          value={name}
-          onInput={(e) => setName((e.target as HTMLInputElement).value)}
-          autoFocus
-        />
+        <input type="text" value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} autoFocus />
       </Field>
       {json === null ? (
         <>
@@ -388,43 +340,26 @@ function RecipeEditor({
               <li
                 key={i}
                 style={{
-                  display: "flex",
+                  display: 'flex',
                   gap: 6,
-                  alignItems: "center",
-                  margin: "4px 0",
+                  alignItems: 'center',
+                  margin: '4px 0',
                 }}
               >
                 <span style={{ flex: 1 }}>{describeStep(s)}</span>
-                <button
-                  class="btn small"
-                  aria-label="Move up"
-                  onClick={() => move(i, -1)}
-                  disabled={i === 0}
-                >
+                <button class="btn small" aria-label="Move up" onClick={() => move(i, -1)} disabled={i === 0}>
                   ↑
                 </button>
-                <button
-                  class="btn small"
-                  aria-label="Move down"
-                  onClick={() => move(i, 1)}
-                  disabled={i === steps.length - 1}
-                >
+                <button class="btn small" aria-label="Move down" onClick={() => move(i, 1)} disabled={i === steps.length - 1}>
                   ↓
                 </button>
-                <button
-                  class="btn small danger"
-                  aria-label="Remove step"
-                  onClick={() => setSteps(steps.filter((_, k) => k !== i))}
-                >
+                <button class="btn small danger" aria-label="Remove step" onClick={() => setSteps(steps.filter((_, k) => k !== i))}>
                   <Icon name="x" />
                 </button>
               </li>
             ))}
           </ol>
-          <div
-            class="row"
-            style={{ display: "flex", gap: 6, flexWrap: "wrap" }}
-          >
+          <div class="row" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             <select
               class="btn"
               aria-label="Add a step"
@@ -441,10 +376,7 @@ function RecipeEditor({
                 </option>
               ))}
             </select>
-            <button
-              class="btn"
-              onClick={() => setJson(JSON.stringify(steps, null, 2))}
-            >
+            <button class="btn" onClick={() => setJson(JSON.stringify(steps, null, 2))}>
               Edit as JSON
             </button>
           </div>
@@ -453,7 +385,7 @@ function RecipeEditor({
         <Field label="Steps (JSON)">
           <textarea
             rows={14}
-            style={{ fontFamily: "monospace", fontSize: 12 }}
+            style={{ fontFamily: 'monospace', fontSize: 12 }}
             value={json}
             onInput={(e) => setJson((e.target as HTMLTextAreaElement).value)}
           />

@@ -18,16 +18,13 @@ export interface SignatureRow {
 let worker: Worker | null = null;
 let ready: Promise<string> | null = null;
 let nextId = 1;
-const pending = new Map<
-  number,
-  { resolve: (v: unknown) => void; reject: (e: unknown) => void }
->();
+const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
 
 function call<T>(method: string, ...args: unknown[]): Promise<T> {
   if (!worker) {
-    worker = new Worker(new URL("./db.worker.ts", import.meta.url), {
-      type: "module",
-      name: "noodle-db",
+    worker = new Worker(new URL('./db.worker.ts', import.meta.url), {
+      type: 'module',
+      name: 'noodle-db',
     });
     worker.onmessage = (
       e: MessageEvent<{
@@ -53,30 +50,27 @@ function call<T>(method: string, ...args: unknown[]): Promise<T> {
 
 export function initDb(): Promise<string> {
   if (!ready)
-    ready = call<string>("init", document.baseURI).catch((e) => {
-      console.warn("local storage unavailable", e);
-      return "unavailable";
+    ready = call<string>('init', document.baseURI).catch((e) => {
+      console.warn('local storage unavailable', e);
+      return 'unavailable';
     });
   return ready;
 }
 async function c<T>(method: string, ...args: unknown[]) {
   const m = await initDb();
-  if (m === "unavailable")
-    throw new Error("Local storage is unavailable in this browser.");
+  if (m === 'unavailable') throw new Error('Local storage is unavailable in this browser.');
   return call<T>(method, ...args);
 }
 
 export const db = {
   mode: () => initDb(),
-  listRecipes: () => c<RecipeRow[]>("listRecipes"),
-  saveRecipe: (r: { id?: number; name: string; steps: string }) =>
-    c<number>("saveRecipe", r),
-  deleteRecipe: (id: number) => c<void>("deleteRecipe", id),
-  listSignatures: () => c<SignatureRow[]>("listSignatures"),
-  saveSignature: (s: { name: string; png: Uint8Array; w: number; h: number }) =>
-    c<number>("saveSignature", s),
-  deleteSignature: (id: number) => c<void>("deleteSignature", id),
-  getSetting: (key: string) => c<string | null>("getSetting", key),
-  setSetting: (key: string, value: string) => c<void>("setSetting", key, value),
-  wipe: () => c<void>("wipe"),
+  listRecipes: () => c<RecipeRow[]>('listRecipes'),
+  saveRecipe: (r: { id?: number; name: string; steps: string }) => c<number>('saveRecipe', r),
+  deleteRecipe: (id: number) => c<void>('deleteRecipe', id),
+  listSignatures: () => c<SignatureRow[]>('listSignatures'),
+  saveSignature: (s: { name: string; png: Uint8Array; w: number; h: number }) => c<number>('saveSignature', s),
+  deleteSignature: (id: number) => c<void>('deleteSignature', id),
+  getSetting: (key: string) => c<string | null>('getSetting', key),
+  setSetting: (key: string, value: string) => c<void>('setSetting', key, value),
+  wipe: () => c<void>('wipe'),
 };
