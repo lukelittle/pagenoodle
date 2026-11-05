@@ -47,7 +47,8 @@ int pn_image_new(pn_doc *doc, const unsigned char *data, size_t len, int w, int 
             pn_dict_put(s, "Decode", dec);
         }
     } else {
-        if ((size_t)w * (size_t)h * (size_t)comps > len) { pn_drop(d); pn_set_error("Pixel buffer too small"); return 0; }
+        if (w <= 0 || h <= 0 || w > PN_MAX_IMAGE_DIM || h > PN_MAX_IMAGE_DIM || comps < 1 || comps > 4 ||
+            (uint64_t)w * (uint64_t)h * (uint64_t)comps > (uint64_t)len) { pn_drop(d); pn_set_error("Bad pixel buffer"); return 0; }
         s = pn_new_stream(d, NULL, 0);
         pn_stream_set(s, data, (size_t)w * (size_t)h * (size_t)comps, 1);
     }
@@ -144,10 +145,11 @@ int pn_image_pixels(pn_doc *doc, int num, pn_buf *out, int *pw, int *ph, int *pc
     int bpc = (int)pn_int(pn_get(doc, img, "BitsPerComponent"), 8);
     int indexed;
     int comps = pn_image_components(doc, img, &indexed);
-    if (w <= 0 || h <= 0 || bpc != 8 || comps <= 0 || pn_dict_get(img, "Decode")) return 0;
+    if (w <= 0 || h <= 0 || w > PN_MAX_IMAGE_DIM || h > PN_MAX_IMAGE_DIM || bpc != 8 || comps <= 0 || comps > 4 || pn_dict_get(img, "Decode")) return 0;
+    if ((uint64_t)w * (uint64_t)h * 4 > PN_MAX_STREAM) return 0;
     size_t len; int ok;
     unsigned char *d = pn_stream_decode(doc, img, &len, &ok);
-    if (!d || !ok || len < (size_t)w * h * comps) { free(d); return 0; }
+    if (!d || !ok || (uint64_t)len < (uint64_t)w * (uint64_t)h * (uint64_t)comps) { free(d); return 0; }
     size_t npx = (size_t)w * h;
     if (indexed) {
         pn_obj *cs = pn_get(doc, img, "ColorSpace");
@@ -188,6 +190,7 @@ int pn_image_pixels(pn_doc *doc, int num, pn_buf *out, int *pw, int *ph, int *pc
 }
 
 int pn_image_replace(pn_doc *doc, int num, const unsigned char *data, size_t len, int w, int h, int comps, int is_jpeg) {
+    if (num <= 0 || num >= doc->nxref) return -1;
     pn_obj *old = pn_load(doc, num);
     if (!pn_is(old, PN_STREAM)) return -1;
     int tmp = pn_image_new(doc, data, len, w, h, comps, is_jpeg, NULL);

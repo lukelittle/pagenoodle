@@ -19,6 +19,32 @@ static void push_op(pn_content *c, const char *name, pn_obj **args, int nargs) {
     }
 }
 
+static pn_obj *ii(pn_obj *d, const char *a, const char *b) { pn_obj *v = pn_dict_get(d, a); return v ? v : pn_dict_get(d, b); }
+
+/* Byte length of an inline image's data, or -1 when it cannot be computed (filtered, or a colour
+ * space given by resource name). */
+static long long inline_image_size(pn_obj *d) {
+    pn_obj *l = pn_dict_get(d, "L");
+    if (pn_is(l, PN_INT) && l->u.i >= 0) return l->u.i;
+    if (ii(d, "F", "Filter")) return -1;
+    long long w = pn_int(ii(d, "W", "Width"), -1), h = pn_int(ii(d, "H", "Height"), -1);
+    pn_obj *im = ii(d, "IM", "ImageMask");
+    int mask = pn_is(im, PN_BOOL) && im->u.b;
+    long long bpc = mask ? 1 : pn_int(ii(d, "BPC", "BitsPerComponent"), -1);
+    int comps = 1;
+    if (!mask) {
+        pn_obj *cs = ii(d, "CS", "ColorSpace");
+        const char *n = pn_name(cs);
+        if (!strcmp(n, "G") || !strcmp(n, "DeviceGray")) comps = 1;
+        else if (!strcmp(n, "RGB") || !strcmp(n, "DeviceRGB")) comps = 3;
+        else if (!strcmp(n, "CMYK") || !strcmp(n, "DeviceCMYK")) comps = 4;
+        else if (pn_is(cs, PN_ARRAY) && (pn_is_name(pn_arr_get(cs, 0), "I") || pn_is_name(pn_arr_get(cs, 0), "Indexed"))) comps = 1;
+        else return -1;
+    }
+    if (w <= 0 || h <= 0 || w > 65536 || h > 65536 || (bpc != 1 && bpc != 2 && bpc != 4 && bpc != 8 && bpc != 16)) return -1;
+    return ((w * comps * bpc + 7) / 8) * h;
+}
+
 pn_content *pn_content_parse(const unsigned char *data, size_t len) {
     pn_content *c = (pn_content *)calloc(1, sizeof *c);
     pn_lexer lx;
@@ -52,12 +78,22 @@ pn_content *pn_content_parse(const unsigned char *data, size_t len) {
                 const unsigned char *p = lx.p;
                 if (p < lx.end && pn_is_ws(*p)) p++;
                 const unsigned char *s = p, *e = NULL;
-                for (const unsigned char *q = p; q + 1 < lx.end; q++) {
+                /* Unfiltered inline images have a computable size, so binary data that happens to
+                 * contain " EI " cannot end the image early (and be re-read as operators). */
+                long long explicit_len = inline_image_size(dict);
+                if (explicit_len >= 0 && explicit_len <= (long long)(lx.end - p)) {
+                    const unsigned char *q = p + explicit_len;
+                    while (q < lx.end && pn_is_ws(*q)) q++;
+                    if (q + 1 < lx.end && q[0] == 'E' && q[1] == 'I') e = q;
+                    else if (q + 1 >= lx.end) e = lx.end;
+                }
+                for (const unsigned char *q = p; !e && q + 1 < lx.end; q++) {
                     if (q[0] == 'E' && q[1] == 'I' && q > s && pn_is_ws(q[-1]) && (q + 2 >= lx.end || pn_is_ws(q[2]) || pn_is_delim(q[2]))) { e = q; break; }
                 }
                 if (!e) e = lx.end;
                 size_t dl = (size_t)(e - s);
-                if (dl > 0 && pn_is_ws(s[dl - 1])) dl--;
+                if (explicit_len >= 0 && (size_t)explicit_len <= dl) dl = (size_t)explicit_len;
+                else if (dl > 0 && pn_is_ws(s[dl - 1])) dl--;
                 for (int i = 0; i < nargs; i++) pn_drop(args[i]);
                 nargs = 0;
                 pn_obj *a1[1] = {dict};

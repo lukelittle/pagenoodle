@@ -1,5 +1,7 @@
 /* Tokenizer and object parser (shared by file parsing and content streams). */
 #include "pn.h"
+
+static pn_obj *parse_obj_tok_inner(pn_lexer *lx, int allow_refs);
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -9,7 +11,7 @@ int pn_is_delim(int c) { return c == '(' || c == ')' || c == '<' || c == '>' || 
 
 void pn_lex_init(pn_lexer *lx, const unsigned char *data, size_t len) {
     lx->p = lx->start = data; lx->end = data + len;
-    lx->tok = TK_EOF; lx->ival = 0; lx->rval = 0; lx->hex = 0;
+    lx->tok = TK_EOF; lx->ival = 0; lx->rval = 0; lx->hex = 0; lx->depth = 0;
     pn_buf_init(&lx->sbuf);
 }
 void pn_lex_free(pn_lexer *lx) { pn_buf_free(&lx->sbuf); }
@@ -139,14 +141,14 @@ pn_tok pn_lex_next(pn_lexer *lx) {
 
 static int kw_is(pn_lexer *lx, const char *k) { return lx->tok == TK_KEYWORD && !strcmp((const char *)lx->sbuf.data, k); }
 
-pn_obj *pn_parse_obj_tok(pn_lexer *lx, int allow_refs) {
+static pn_obj *parse_obj_tok_inner(pn_lexer *lx, int allow_refs) {
     switch (lx->tok) {
     case TK_INT: {
         long long v = lx->ival;
-        if (allow_refs && v >= 0) {
+        if (allow_refs && v > 0 && v <= 0x7fffffff) {
             const unsigned char *save = lx->p;
             pn_tok t2 = pn_lex_next(lx);
-            if (t2 == TK_INT && lx->ival >= 0) {
+            if (t2 == TK_INT && lx->ival >= 0 && lx->ival <= 65535) {
                 long long gen = lx->ival;
                 pn_lex_next(lx);
                 if (kw_is(lx, "R")) return pn_new_ref((int)v, (int)gen);
@@ -204,6 +206,28 @@ pn_obj *pn_parse_obj_tok(pn_lexer *lx, int allow_refs) {
         return NULL;
     default: return NULL;
     }
+}
+
+/* Nesting is capped so crafted input cannot exhaust the (small, WASM) stack; every other recursion
+ * over object structure (copy, write, free) is bounded by this too. */
+pn_obj *pn_parse_obj_tok(pn_lexer *lx, int allow_refs) {
+    if (lx->tok == TK_ARR_OPEN || lx->tok == TK_DICT_OPEN) {
+        if (lx->depth >= PN_MAX_NESTING) {
+            int lvl = 1;
+            while (lvl > 0) {
+                pn_tok t = pn_lex_next(lx);
+                if (t == TK_EOF) break;
+                if (t == TK_ARR_OPEN || t == TK_DICT_OPEN) lvl++;
+                else if (t == TK_ARR_CLOSE || t == TK_DICT_CLOSE) lvl--;
+            }
+            return pn_null();
+        }
+        lx->depth++;
+        pn_obj *r = parse_obj_tok_inner(lx, allow_refs);
+        lx->depth--;
+        return r;
+    }
+    return parse_obj_tok_inner(lx, allow_refs);
 }
 
 pn_obj *pn_parse_obj(pn_lexer *lx, int allow_refs) {

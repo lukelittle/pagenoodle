@@ -30,7 +30,7 @@ static int *widget_pages(pn_doc *doc) {
         pn_obj *annots = pn_get(doc, pn_doc_page(doc, p), "Annots");
         for (int i = 0; i < pn_arr_len(annots); i++) {
             pn_obj *r = pn_arr_get(annots, i);
-            if (r && r->type == PN_REF && r->u.ref.num < doc->nxref) map[r->u.ref.num] = p;
+            if (r && r->type == PN_REF && r->u.ref.num > 0 && r->u.ref.num < doc->nxref) map[r->u.ref.num] = p;
         }
     }
     return map;
@@ -57,8 +57,13 @@ static void on_states(pn_doc *doc, pn_obj *widget, pn_buf *out) {
     pn_buf_puts(out, "\"Yes\"");
 }
 
-static void emit_field(pn_doc *doc, pn_obj *ref, const char *prefix, int *wp, pn_buf *out, int *first, int depth) {
+static void emit_field(pn_doc *doc, pn_obj *ref, const char *prefix, int *wp, pn_buf *out, int *first, int depth, char *seen) {
     if (depth > 16) return;
+    if (ref && ref->type == PN_REF) {
+        int n = ref->u.ref.num;
+        if (n <= 0 || n >= doc->nxref || seen[n]) return; /* shared/cyclic field node */
+        seen[n] = 1;
+    }
     pn_obj *f = pn_resolve(doc, ref);
     if (!pn_is(f, PN_DICT)) return;
     char name[512];
@@ -73,7 +78,7 @@ static void emit_field(pn_doc *doc, pn_obj *ref, const char *prefix, int *wp, pn
     int kid_fields = 0;
     for (int i = 0; i < pn_arr_len(kids); i++) if (pn_get(doc, pn_resolve(doc, pn_arr_get(kids, i)), "T")) kid_fields = 1;
     if (kid_fields) {
-        for (int i = 0; i < pn_arr_len(kids); i++) emit_field(doc, pn_arr_get(kids, i), name, wp, out, first, depth + 1);
+        for (int i = 0; i < pn_arr_len(kids); i++) emit_field(doc, pn_arr_get(kids, i), name, wp, out, first, depth + 1, seen);
         return;
     }
     if (!ref || ref->type != PN_REF) return;
@@ -124,10 +129,12 @@ void pn_form_json(pn_doc *doc, pn_buf *out) {
     pn_obj *af = pn_get(doc, pn_catalog(doc), "AcroForm");
     pn_obj *fields = pn_get(doc, af, "Fields");
     int *wp = widget_pages(doc);
+    char *seen = (char *)calloc((size_t)doc->nxref + 1, 1);
     int first = 1;
     pn_buf_putc(out, '[');
-    for (int i = 0; i < pn_arr_len(fields); i++) emit_field(doc, pn_arr_get(fields, i), "", wp, out, &first, 0);
+    for (int i = 0; i < pn_arr_len(fields); i++) emit_field(doc, pn_arr_get(fields, i), "", wp, out, &first, 0, seen);
     pn_buf_putc(out, ']');
+    free(seen);
     free(wp);
 }
 

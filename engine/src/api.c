@@ -227,6 +227,15 @@ NOODLE_API int nd_verify(int h, int page, const double *r, int n) {
     return cnt;
 }
 
+/* Remove a term from annotations, form values, bookmarks and metadata (not page content). */
+NOODLE_API int nd_scrub_term(int h, const char *term) { return D(h) ? pn_scrub_term(D(h), term) : -1; }
+/* Where does a term still occur? JSON {"text":n,"strings":n,"streams":n}; returns the total. */
+NOODLE_API int nd_scan_term(int h, const char *term) {
+    if (!D(h)) return -1;
+    out_reset();
+    return pn_scan_term(D(h), term, &g_out);
+}
+
 /* forms */
 NOODLE_API int nd_forms(int h) { if (!D(h)) return -1; out_reset(); pn_form_json(D(h), &g_out); return (int)g_out.len; }
 NOODLE_API int nd_form_set(int h, int id, const char *value) { return D(h) ? pn_form_set(D(h), id, value) : -1; }

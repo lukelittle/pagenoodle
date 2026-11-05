@@ -91,6 +91,11 @@ pn_obj *pn_deep_copy_direct(pn_obj *o); /* copies direct structure; refs stay re
 /* ------------------------------------------------------------------ */
 /* Lexer / parser                                                      */
 /* ------------------------------------------------------------------ */
+#define PN_MAX_NESTING 64
+#define PN_MAX_STREAM ((size_t)512 << 20) /* decompressed bytes per stream */
+#define PN_MAX_IMAGE_DIM 65536
+#define PN_MAX_CIDW 65536
+
 typedef enum {
     TK_EOF, TK_ERR, TK_INT, TK_REAL, TK_STRING, TK_NAME, TK_KEYWORD,
     TK_ARR_OPEN, TK_ARR_CLOSE, TK_DICT_OPEN, TK_DICT_CLOSE, TK_BRACE_OPEN, TK_BRACE_CLOSE
@@ -103,6 +108,7 @@ typedef struct {
     double rval;
     pn_buf sbuf; /* string / name / keyword text */
     int hex;
+    int depth;   /* nesting depth guard against stack exhaustion */
 } pn_lexer;
 
 void pn_lex_init(pn_lexer *lx, const unsigned char *data, size_t len);
@@ -134,6 +140,8 @@ typedef struct pn_doc {
     int pages_dirty;
     int encrypted;
     int repaired;
+    unsigned char *stm_loaded; /* object streams already decoded (each is decoded at most once) */
+    int stm_loaded_n;
 } pn_doc;
 
 pn_doc *pn_doc_new(void);                 /* empty document with catalog + page tree */

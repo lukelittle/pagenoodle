@@ -339,6 +339,151 @@ static void test_garbage(void) {
     free(d);
 }
 
+static void test_adversarial(void) {
+    puts("adversarial files from the security review");
+    /* text 14 Form XObjects deep: redaction must still remove it (fail closed) */
+    int h = open_fx("nested.pdf");
+    double r[4] = {60, 490, 400, 530};
+    nd_redact(h, 0, r, 1, 0);
+    CHECK(!bytes_contain(h, ND_SAVE_GC | ND_SAVE_COMPRESS, "TOPSECRET"), "deeply nested text removed");
+    int o = roundtrip(h, ND_SAVE_GC);
+    char *t = text_of(o, 0);
+    CHECK(strstr(t, "Public header") != NULL, "content outside the box kept: %s", t);
+    free(t);
+    nd_close(o); nd_close(h);
+    /* geometry must match PDF.js: invalid /Rotate is ignored, CropBox is clipped to MediaBox */
+    h = open_fx("rot135.pdf");
+    nd_info(h);
+    CHECK(strstr((char *)nd_out_ptr(), "{\"rot\":0,\"vw\":612.000,\"vh\":792.000") != NULL, "/Rotate 135 treated as 0: %s", (char *)nd_out_ptr());
+    nd_close(h);
+    h = open_fx("crop.pdf");
+    nd_info(h);
+    CHECK(strstr((char *)nd_out_ptr(), "\"vw\":612.000,\"vh\":792.000") != NULL, "CropBox clipped to MediaBox: %s", (char *)nd_out_ptr());
+    nd_close(h);
+    /* a term that also lives in a form value, its appearance, a note, a bookmark and Info */
+    h = open_fx("elsewhere.pdf");
+    CHECK(nd_scan_term(h, "John Smith") > 0, "term found before");
+    nd_search(h, "John Smith", 1);
+    const char *rp = strstr((const char *)nd_out_ptr(), "[[");
+    double rr[4] = {0};
+    if (rp) sscanf(rp, "[[%lf,%lf,%lf,%lf]", &rr[0], &rr[1], &rr[2], &rr[3]);
+    nd_redact(h, 0, rr, 1, 0);
+    CHECK(nd_scrub_term(h, "John Smith") > 0, "scrubbed outside page content");
+    o = roundtrip(h, ND_SAVE_GC | ND_SAVE_COMPRESS | ND_SAVE_STRIPMETA);
+    CHECK(nd_scan_term(o, "John Smith") == 0, "term gone everywhere: %s", (char *)nd_out_ptr());
+    CHECK(!bytes_contain(o, ND_SAVE_GC, "John Smith"), "not in any byte or stream");
+    t = text_of(o, 0);
+    CHECK(strstr(t, "Emergency contact:") != NULL, "other text kept");
+    free(t);
+    nd_close(o); nd_close(h);
+}
+
+/* Inputs that once crashed the fuzzer must stay harmless. */
+static void test_fuzz_regressions(void) {
+    puts("fuzzer regressions");
+    char dir[1024];
+    snprintf(dir, sizeof dir, "%s/../fuzz-regressions", g_dir);
+    const char *names[] = {"crash-1bd17bc9bcede4a44b42fd9c1f6f9f1bc536daa8", "crash-2e6ed789f6a9433f78fb64e6f6fbc2e3d46c0d2c",
+                           "crash-4a6c2e6b798718099afc4b315a587ec686206bef", "crash-d53353ef1bf7df3782d92f9a2d16b52e3199eaf1"};
+    for (int i = 0; i < 4; i++) {
+        char path[1200];
+        snprintf(path, sizeof path, "%s/%s", dir, names[i]);
+        FILE *f = fopen(path, "rb");
+        if (!f) { CHECK(0, "missing %s", path); continue; }
+        fseek(f, 0, SEEK_END);
+        long n = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        unsigned char *d = malloc((size_t)n + 1);
+        if (fread(d, 1, (size_t)n, f) != (size_t)n) n = 0;
+        fclose(f);
+        int h = nd_open(d, (int)n);
+        if (h) {
+            int np = nd_page_count(h);
+            for (int p = 0; p < np && p < 50; p++) nd_text(h, p);
+            nd_search(h, "a", 1);
+            double r[4] = {0, 0, 300, 300};
+            nd_redact(h, 0, r, 1, 0);
+            nd_ov_begin(h, 0); nd_ov_font("Helvetica"); nd_ov_ops("q Q"); nd_ov_end();
+            nd_stamp(h, "{n}", 4, 10, 24, 0, -1, 1, "Helvetica", 0);
+            int hs[2] = {h, h}, pg[2] = {0, np - 1};
+            int a = nd_assemble(hs, pg, NULL, 2);
+            if (a) { nd_save(a, 1 | 2 | 4 | 8 | 16 | 32); nd_close(a); }
+            nd_save(h, 1 | 2 | 4 | 8 | 32);
+            nd_close(h);
+        }
+        free(d);
+        CHECK(1, "%s handled", names[i]);
+    }
+}
+
+/* Proof-of-concept files from the security review (tests/security). Each must open and process
+ * without crashing or hanging, and redaction must leave no trace of its secret. */
+static unsigned char *slurp_path(const char *path, int *len) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    unsigned char *d = malloc((size_t)n + 1);
+    if (fread(d, 1, (size_t)n, f) != (size_t)n) n = 0;
+    fclose(f);
+    *len = (int)n;
+    return d;
+}
+
+static void test_security_pocs(void) {
+    puts("security review proof-of-concept files");
+    struct { const char *file; double r[4]; const char *secret; } cases[] = {
+        {"actualtext.pdf", {0, 0, 1000, 1000}, "123-45-6789"},
+        {"annot_popup.pdf", {0, 0, 1000, 1000}, "SECRET-APPEARANCE"},
+        {"annot_popup.pdf", {0, 0, 1000, 1000}, "SECRET-RICHTEXT"},
+        {"annot_popup.pdf", {0, 0, 1000, 1000}, "SECRET-AUTHOR"},
+        {"deepform13.pdf", {90, 690, 400, 730}, "SECRET-SSN-123"},
+        {"deepform30.pdf", {0, 0, 1000, 1000}, "SECRET-SSN-123"},
+        {"inline_ei.pdf", {0, 0, 1000, 1000}, "PIXELDATA-SECRET"},
+        {"pattern.pdf", {0, 0, 1000, 1000}, "PATTERN-SECRET"},
+        {"qstack.pdf", {90, 190, 300, 230}, "TOPSECRET"},
+        {"smask.pdf", {0, 0, 1000, 1000}, "SECRETALPHAMASK"},
+        {"struct_stm.pdf", {0, 0, 1000, 1000}, "FORM-SECRET-42"},
+        {"tf0.pdf", {0, 0, 1000, 1000}, "ZEROSIZE-SECRET"},
+        {"vertical.pdf", {0, 0, 1000, 1000}, "ABCDEFGH"},
+    };
+    char path[1200];
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        snprintf(path, sizeof path, "%s/../security/%s", g_dir, cases[i].file);
+        int len;
+        unsigned char *d = slurp_path(path, &len);
+        if (!d) { CHECK(0, "missing %s", path); continue; }
+        int h = nd_open(d, len);
+        free(d);
+        if (!h) { CHECK(0, "open %s: %s", cases[i].file, nd_error()); continue; }
+        nd_redact_mode(1);
+        nd_redact(h, 0, cases[i].r, 1, 0);
+        CHECK(!bytes_contain(h, ND_SAVE_GC | ND_SAVE_COMPRESS, cases[i].secret), "%s: \"%s\" removed", cases[i].file, cases[i].secret);
+        nd_close(h);
+    }
+    /* memory-safety / hang cases: every API must just work */
+    const char *crashers[] = {"annots_negref.pdf", "bigtr.pdf", "fields_dag.pdf", "img_rowbytes_overflow.pdf", "inflate_exact.pdf",
+                              "objstm_neg.pdf", "objstm_quad.pdf", "pagedag.pdf", "predictor.pdf", "sharedform.pdf", "sharedres.pdf"};
+    for (size_t i = 0; i < sizeof crashers / sizeof crashers[0]; i++) {
+        snprintf(path, sizeof path, "%s/../security/%s", g_dir, crashers[i]);
+        int len;
+        unsigned char *d = slurp_path(path, &len);
+        if (!d) { CHECK(0, "missing %s", path); continue; }
+        int h = nd_open(d, len);
+        free(d);
+        if (h) {
+            nd_info(h); nd_forms(h); nd_images(h);
+            for (int p = 0; p < nd_page_count(h) && p < 20; p++) nd_text(h, p);
+            double r[4] = {100, 100, 150, 150};
+            nd_redact(h, 0, r, 1, 0);
+            nd_save(h, 1 | 2 | 4 | 8 | 16 | 32);
+            nd_close(h);
+        }
+        CHECK(1, "%s handled", crashers[i]);
+    }
+}
+
 int main(int argc, char **argv) {
     g_dir = argc > 1 ? argv[1] : "tests/fixtures";
     test_open_and_text();
@@ -351,6 +496,9 @@ int main(int argc, char **argv) {
     test_forms();
     test_stamp_overlay_images();
     test_garbage();
+    test_adversarial();
+    test_fuzz_regressions();
+    test_security_pocs();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

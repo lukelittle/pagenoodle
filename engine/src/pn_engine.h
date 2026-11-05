@@ -26,6 +26,10 @@ int pn_count_glyphs_in(pn_doc *doc, int page, const pn_rect *rects, int n, pn_bu
 int pn_redact_image(pn_doc *doc, pn_obj *img, pn_mat ctm, const pn_rect *rects, int n, int *newnum);
 int pn_redact_page(pn_doc *doc, int page, const pn_rect *rects, int n, int fill_rgb, pn_redact_stats *st, pn_buf *removed);
 
+/* scrub.c */
+int pn_scrub_term(pn_doc *doc, const char *term);
+int pn_scan_term(pn_doc *doc, const char *term, pn_buf *out);
+
 /* overlay.c */
 int pn_overlay_begin(pn_doc *doc, int page);
 const char *pn_overlay_font(const char *basefont);
