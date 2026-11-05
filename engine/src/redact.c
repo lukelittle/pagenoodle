@@ -2,6 +2,7 @@
 #include "pn.h"
 #include "pn_engine.h"
 int pn_redact_pattern(pn_doc *doc, pn_obj *pat);
+int pn_redact_type3(pn_doc *doc, pn_obj *font);
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -196,6 +197,19 @@ static void redact_doc_cleanup(pn_doc *doc, pn_redact_stats *st) {
         }
         pn_dict_put(page, "Annots", keep);
     }
+    /* attachments and file-launching actions anywhere in the document */
+    for (int i = 1; i < doc->nxref; i++) {
+        pn_obj *o = doc->xref[i].obj ? doc->xref[i].obj : pn_load(doc, i);
+        if (!o || (o->type != PN_DICT && o->type != PN_STREAM)) continue;
+        if (pn_is_name(pn_dict_get(o, "Type"), "EmbeddedFile")) { pn_set_obj(doc, i, pn_null()); st->annots++; continue; }
+        pn_dict_del(o, "AF");
+        if (pn_dict_get(o, "EF")) { pn_dict_del(o, "EF"); pn_dict_del(o, "RF"); } /* file specification payloads */
+        pn_obj *act = pn_get(doc, o, "A");
+        const char *s = pn_name(pn_get(doc, act, "S"));
+        if (!strcmp(s, "Launch") || !strcmp(s, "GoToE") || !strcmp(s, "GoToR") || !strcmp(s, "ImportData") || !strcmp(s, "SubmitForm") ||
+            !strcmp(s, "JavaScript") || !strcmp(s, "RichMediaExecute") || !strcmp(s, "Rendition"))
+            pn_dict_del(o, "A");
+    }
 }
 
 int pn_redact_page(pn_doc *doc, int pageidx, const pn_rect *rects, int n, int fill_rgb, pn_redact_stats *st, pn_buf *removed) {
@@ -258,7 +272,17 @@ int pn_redact_page(pn_doc *doc, int pageidx, const pn_rect *rects, int n, int fi
             if (!pn_is(o, PN_DICT) || !pn_dict_get(o, "S")) continue;
             pn_obj *pg = NULL, *node = o; /* /Pg may be inherited from an ancestor element */
             for (int d = 0; node && d < 64 && !pg; d++) { pg = pn_dict_get(node, "Pg"); node = pn_get(doc, node, "P"); }
-            if (pg && pg->type == PN_REF && pg->u.ref.num == pnum) {
+            int on_page = pg && pg->type == PN_REF && pg->u.ref.num == pnum;
+            /* ...or given only on marked-content / object reference kids */
+            pn_obj *k = pn_get(doc, o, "K");
+            int nk = pn_is(k, PN_ARRAY) ? pn_arr_len(k) : (k ? 1 : 0);
+            for (int j = 0; j < nk && !on_page; j++) {
+                pn_obj *kid = pn_is(k, PN_ARRAY) ? pn_resolve(doc, pn_arr_get(k, j)) : k;
+                pn_obj *kpg = pn_is(kid, PN_DICT) ? pn_dict_get(kid, "Pg") : NULL;
+                if (kpg && kpg->type == PN_REF && kpg->u.ref.num == pnum) on_page = 1;
+            }
+            int has_alt = pn_dict_get(o, "ActualText") || pn_dict_get(o, "Alt") || pn_dict_get(o, "E");
+            if (on_page || (!pg && has_alt)) { /* page unknown: fail closed */
                 pn_dict_del(o, "ActualText");
                 pn_dict_del(o, "Alt");
                 pn_dict_del(o, "E");

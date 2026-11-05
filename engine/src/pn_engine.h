@@ -9,6 +9,7 @@ typedef struct {
     int images_scrubbed; /* images whose pixels were blanked */
     int forms;           /* form XObjects rewritten */
     int annots;          /* annotations / form widgets removed */
+    int too_complex;     /* page exceeded the analysis budget: redaction refused */
 } pn_redact_stats;
 
 /* pages.c */

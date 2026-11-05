@@ -199,8 +199,8 @@ NOODLE_API int nd_redact(int h, int page, const double *r, int n, int fill_rgb) 
     int rc = pn_redact_page(d, page, rects, n, fill_rgb, &st, &removed);
     free(rects);
     out_reset();
-    pn_buf_printf(&g_out, "{\"ok\":%s,\"glyphs\":%d,\"imagesRemoved\":%d,\"imagesScrubbed\":%d,\"forms\":%d,\"annots\":%d,\"removedText\":",
-                  rc == 0 ? "true" : "false", st.glyphs, st.images_removed, st.images_scrubbed, st.forms, st.annots);
+    pn_buf_printf(&g_out, "{\"ok\":%s,\"tooComplex\":%s,\"glyphs\":%d,\"imagesRemoved\":%d,\"imagesScrubbed\":%d,\"forms\":%d,\"annots\":%d,\"removedText\":",
+                  rc == 0 ? "true" : "false", st.too_complex ? "true" : "false", st.glyphs, st.images_removed, st.images_scrubbed, st.forms, st.annots);
     pn_json_str(&g_out, removed.data ? (const char *)removed.data : "", (int)removed.len);
     pn_buf_puts(&g_out, ",\"needRaster\":[");
     int first = 1;

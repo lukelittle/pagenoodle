@@ -191,7 +191,12 @@ async function applyOps(h: number, ops: EditOp[], dropUndecodable: boolean) {
         const flat = op.rects.flat();
         const rc = withDoubles(flat, (p) => M._nd_redact(h, op.page, p, op.rects.length, op.fill));
         const rep = JSON.parse(outStr()) as RedactReport;
-        if (rc !== 0 || !rep.ok) throw new Error(`Redaction failed on page ${op.page + 1} — nothing was saved.`);
+        if (rc !== 0 || !rep.ok)
+          throw new Error(
+            (rep as RedactReport & { tooComplex?: boolean }).tooComplex
+              ? `Page ${op.page + 1} is too complex for me to redact safely, so nothing was changed. Try “Pages → PNG/JPG”, then redact the image.`
+              : `Redaction failed on page ${op.page + 1} — nothing was saved.`,
+          );
         rep.needRaster?.forEach((n) => needRaster.add(n));
         reports.push(rep);
         break;

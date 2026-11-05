@@ -185,24 +185,47 @@ static int lookup_num(pn_doc *doc, pn_obj *res, const char *cat, const char *nam
 
 static void walk(walker *w, const unsigned char *data, size_t len, pn_obj *res, pn_mat basectm, pn_buf *out, int toplevel);
 
-/* A tiling pattern whose cell content can show text or images is emptied in place when used on a
- * redacted page (fail closed: its geometry repeats across the page and is not analysed). */
-int pn_redact_pattern(pn_doc *doc, pn_obj *pat) {
-    if (!pn_is(pat, PN_STREAM) || pn_int(pn_get(doc, pat, "PatternType"), 0) != 1) return 0;
+/* Can this content stream show text, images, forms, shadings or other patterns? */
+static int content_is_risky(pn_doc *doc, pn_obj *stm, int text_only) {
     size_t pl; int pok;
-    unsigned char *pdat = pn_stream_decode(doc, pat, &pl, &pok);
+    unsigned char *pdat = pn_stream_decode(doc, stm, &pl, &pok);
     int risky = !pdat || !pok;
     if (pdat && !risky) {
         pn_content *c = pn_content_parse(pdat, pl);
         for (int i = 0; i < c->n && !risky; i++) {
             const char *n = c->ops[i].name;
-            risky = !strcmp(n, "Tj") || !strcmp(n, "TJ") || !strcmp(n, "'") || !strcmp(n, "\"") || !strcmp(n, "Do") || !strcmp(n, "BI");
+            risky = !strcmp(n, "Tj") || !strcmp(n, "TJ") || !strcmp(n, "'") || !strcmp(n, "\"");
+            if (!text_only) risky = risky || !strcmp(n, "Do") || !strcmp(n, "BI") || !strcmp(n, "sh") || ((!strcmp(n, "scn") || !strcmp(n, "SCN")) && c->ops[i].nargs && pn_is(c->ops[i].args[c->ops[i].nargs - 1], PN_NAME));
         }
         pn_content_free(c);
     }
     free(pdat);
-    if (risky) pn_stream_set(pat, (const unsigned char *)"", 0, 0);
     return risky;
+}
+
+/* A tiling pattern whose cell content can show text or images (directly, or through nested patterns,
+ * forms or shadings) is emptied in place when used on a redacted page — fail closed: its geometry
+ * repeats across the page and is not analysed. Its resources go too, so nothing nested survives. */
+int pn_redact_pattern(pn_doc *doc, pn_obj *pat) {
+    if (!pn_is(pat, PN_STREAM) || pn_int(pn_get(doc, pat, "PatternType"), 0) != 1) return 0;
+    if (!content_is_risky(doc, pat, 0)) return 0;
+    pn_stream_set(pat, (const unsigned char *)"", 0, 0);
+    pn_obj *old = pn_dict_get(pat, "Resources");
+    if (old) { pn_retire(doc, old); pn_dict_put(pat, "Resources", pn_new_dict()); }
+    return 1;
+}
+
+/* Type3 glyph procedures that draw text or images (instead of a glyph shape) are emptied. */
+int pn_redact_type3(pn_doc *doc, pn_obj *font) {
+    if (!pn_is(font, PN_DICT) || !pn_is_name(pn_get(doc, font, "Subtype"), "Type3")) return 0;
+    pn_obj *procs = pn_get(doc, font, "CharProcs");
+    int n = 0;
+    for (int i = 0; i < pn_dict_len(procs); i++) {
+        pn_obj *cp = pn_resolve(doc, pn_dict_val(procs, i));
+        if (pn_is(cp, PN_STREAM) && content_is_risky(doc, cp, 1)) { /* bitmap glyphs (BI) are normal */ pn_stream_set(cp, (const unsigned char *)"", 0, 0); n++; }
+    }
+    if (n) { pn_obj *old = pn_dict_get(font, "Resources"); if (old) { pn_retire(doc, old); pn_dict_put(font, "Resources", pn_new_dict()); } }
+    return n;
 }
 
 /* Alternate text that may repeat redacted content */
@@ -219,8 +242,9 @@ static void redact_form(walker *w, pn_obj *form, pn_obj *res, pn_mat ctm) {
     pn_mat fctm = pn_mat_mul(fmat, ctm);
     pn_obj *fres = pn_get(w->doc, form, "Resources");
     if (!fres) fres = res;
-    size_t dl; int ok;
-    unsigned char *d = pn_stream_decode(w->doc, form, &dl, &ok);
+    size_t dl = 0; int ok = 0;
+    unsigned char *d = w->overbudget ? NULL : pn_stream_decode(w->doc, form, &dl, &ok);
+    w->ops += 1 + (long long)(dl / 64); /* decoding work counts against the page budget */
     pn_buf ob; pn_buf_init(&ob);
     int before = w->stats->glyphs + w->stats->images_removed + w->stats->images_scrubbed + w->stats->forms;
     if (d && ok && w->nactive < 32) {
@@ -283,7 +307,7 @@ static void walk(walker *w, const unsigned char *data, size_t len, pn_obj *res, 
         int written = 0;
         if (++w->ops > PN_OP_BUDGET && !w->overbudget) {
             w->overbudget = 1;
-            if (w->redact) w->stats->forms++;
+            if (w->redact) w->stats->too_complex = 1;
         }
         if (w->overbudget) {
             if (!w->redact) break;
@@ -308,6 +332,7 @@ static void walk(walker *w, const unsigned char *data, size_t len, pn_obj *res, 
         else if (!strcmp(nm, "Tf") && na >= 2) {
             g.tfs = NUM(1);
             pn_obj *fd = lookup_res(w->doc, res, "Font", pn_name(a[0]));
+            if (w->redact && fd && pn_redact_type3(w->doc, fd)) w->stats->forms++;
             g.font = fd ? pn_font_load(w->doc, fd, &w->fonts) : NULL;
         }
         else if (!strcmp(nm, "Tc")) g.tc = NUM(0);
@@ -412,8 +437,9 @@ static void walk(walker *w, const unsigned char *data, size_t len, pn_obj *res, 
                     if (form_active(w, xo)) { w->stats->forms++; written = 1; } /* self-drawing form: drop the call */
                     else if (hits(w, pn_rect_transform(fb, fctm))) redact_form(w, xo, res, g.ctm);
                 } else {
-                    size_t dl; int ok;
-                    unsigned char *d = pn_stream_decode(w->doc, xo, &dl, &ok);
+                    size_t dl = 0; int ok = 0;
+                    unsigned char *d = (w->overbudget || form_active(w, xo)) ? NULL : pn_stream_decode(w->doc, xo, &dl, &ok);
+                    w->ops += 1 + (long long)(dl / 64);
                     pn_obj *fres = pn_get(w->doc, xo, "Resources");
                     if (d && !form_active(w, xo) && w->nactive < 32) {
                         w->active[w->nactive++] = xo;
@@ -665,6 +691,12 @@ int pn_redact_page_content(pn_doc *doc, int pageidx, const pn_rect *rects, int n
     walk(w, data, len, res, pn_mat_identity(), &out, 1);
     pn_buf_puts(&out, "Q\n");
     free(data);
+    if (stats->too_complex) { /* refuse rather than silently truncate the page */
+        pn_buf_free(&out);
+        free_walker(w);
+        pn_set_error("This page is too complex to redact safely.");
+        return -1;
+    }
     /* the old content stream object is replaced; shared XObjects were redacted in place */
     pn_page_set_content(doc, page, out.data, out.len);
     pn_buf_free(&out);

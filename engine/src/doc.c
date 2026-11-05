@@ -4,6 +4,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Object numbers are bounded by the file size (each object costs bytes), with a floor for sparse
+ * numbering; otherwise one huge number would allocate a giant table and slow every pass. */
+static int max_objnum(pn_doc *doc) {
+    size_t m = doc->len > (1u << 20) ? doc->len : (1u << 20);
+    return m > 8000000 ? 8000000 : (int)m;
+}
+
 static void xref_ensure(pn_doc *doc, int n) {
     if (n <= doc->nxref) return;
     if (n > doc->capxref) {
@@ -140,6 +147,11 @@ out:
     return res;
 }
 
+static int cmp_ll(const void *a, const void *b) {
+    long long x = *(const long long *)a, y = *(const long long *)b;
+    return x < y ? -1 : x > y;
+}
+
 static void load_objstm(pn_doc *doc, int stmnum) {
     if (stmnum <= 0 || stmnum >= doc->nxref) return;
     if (stmnum >= doc->stm_loaded_n) {
@@ -168,16 +180,28 @@ static void load_objstm(pn_doc *doc, int stmnum) {
         if (pn_lex_next(&lx) != TK_INT) { n = i; break; }
         ofs[i] = lx.ival;
     }
+    /* Each member is parsed only up to the next member's start, so crafted overlapping offsets
+     * cannot make every member re-parse the same huge region (total work stays linear). */
+    long long *sorted = (long long *)malloc(sizeof(long long) * (size_t)(n + 1));
+    memcpy(sorted, ofs, sizeof(long long) * (size_t)n);
+    qsort(sorted, (size_t)n, sizeof(long long), cmp_ll);
     for (int i = 0; i < n; i++) {
         int num = nums[i];
         if (num <= 0 || num >= doc->nxref) continue;
         pn_xref *x = &doc->xref[num];
         if (x->type != 2 || x->stm != stmnum || x->obj) continue;
         if (first < 0 || ofs[i] < 0 || first + ofs[i] >= (long long)len) continue;
-        lx.p = data + first + ofs[i];
-        pn_obj *o = pn_parse_obj(&lx, 1);
+        long long stop = (long long)len - first;
+        int lo = 0, hi = n - 1; /* smallest offset strictly greater than ours */
+        while (lo <= hi) { int mid = (lo + hi) / 2; if (sorted[mid] > ofs[i]) { stop = sorted[mid]; hi = mid - 1; } else lo = mid + 1; }
+        if (first + stop > (long long)len) stop = (long long)len - first;
+        pn_lexer ml;
+        pn_lex_init(&ml, data + first + ofs[i], (size_t)(stop - ofs[i]));
+        pn_obj *o = pn_parse_obj(&ml, 1);
+        pn_lex_free(&ml);
         x->obj = o ? o : pn_null();
     }
+    free(sorted);
     pn_lex_free(&lx);
     free(nums); free(ofs); free(data);
 }
@@ -225,7 +249,7 @@ int pn_is_annotation(pn_doc *doc, pn_obj *o) {
 
 /* ---------------- xref parsing ---------------- */
 static void set_entry(pn_doc *doc, int num, int type, long long a, int b, char *seen) {
-    if (num <= 0 || num > 10000000) return;
+    if (num <= 0 || num > max_objnum(doc)) return;
     xref_ensure(doc, num + 1);
     if (seen[0] == 0) { /* seen map not used; rely on "type==0 means unset" */ }
     pn_xref *x = &doc->xref[num];
@@ -246,7 +270,7 @@ static int read_xref_table(pn_doc *doc, pn_lexer *lx, pn_obj **trailer_out, char
         long long start = lx->ival;
         if (pn_lex_next(lx) != TK_INT) return 0;
         long long count = lx->ival;
-        if (count < 0 || count > 10000000) return 0;
+        if (count < 0 || start < 0 || start + count > (long long)max_objnum(doc) + 1) return 0;
         for (long long i = 0; i < count; i++) {
             if (pn_lex_next(lx) != TK_INT) return 0;
             long long ofs = lx->ival;
@@ -394,7 +418,7 @@ static int repair(pn_doc *doc) {
             if (j == ne) continue;
             if (j > 0 && !pn_is_ws(b[j - 1]) && !pn_is_delim(b[j - 1])) continue;
             int num = atoi((const char *)b + j);
-            if (num <= 0 || num > 10000000) continue;
+            if (num <= 0 || num > max_objnum(doc)) continue;
             xref_ensure(doc, num + 1);
             pn_xref *x = &doc->xref[num];
             pn_drop(x->obj); x->obj = NULL;
@@ -425,7 +449,7 @@ static int repair(pn_doc *doc) {
                 if (pn_lex_next(&lx) != TK_INT) break;
                 int on = (int)lx.ival;
                 if (pn_lex_next(&lx) != TK_INT) break;
-                if (on <= 0 || on > 10000000) continue;
+                if (on <= 0 || on > max_objnum(doc)) continue;
                 xref_ensure(doc, on + 1);
                 if (doc->xref[on].type == 0) { doc->xref[on].type = 2; doc->xref[on].stm = num; doc->xref[on].idx = k; }
             }
@@ -499,7 +523,7 @@ pn_obj *pn_doc_page(pn_doc *doc, int idx) { int n = pn_doc_page_num(doc, idx); r
 /* Walk the /Parent chain like PDF.js does: no depth limit, but cycle-safe (Floyd's tortoise/hare). */
 pn_obj *pn_page_inherited_raw(pn_doc *doc, pn_obj *page, const char *key) {
     pn_obj *slow = page, *fast = page;
-    while (fast) {
+    for (int steps = 0; fast && steps < 4096; steps++) { /* deeper chains are pathological (UI refuses to redact on mismatch) */
         pn_obj *v = pn_dict_get(fast, key);
         if (v) return v;
         fast = pn_get(doc, fast, "Parent");
@@ -523,7 +547,7 @@ pn_obj *pn_page_resources(pn_doc *doc, pn_obj *page) {
     pn_obj *merged = NULL, *single = NULL;
     int levels = 0;
     pn_obj *slow = page, *node = page;
-    for (int step = 0; node; step++) {
+    for (int step = 0; node && step < 8192; step++) {
         pn_obj *r = pn_get(doc, node, "Resources");
         if (pn_is(r, PN_DICT)) {
             if (levels == 0) single = r;

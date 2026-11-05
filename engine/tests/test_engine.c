@@ -460,6 +460,9 @@ static void test_security_pocs(void) {
         {"props.pdf", {90, 690, 400, 730}, "ALT-SSN"},
         {"pattern_quote.pdf", {0, 0, 1000, 1000}, "PATTERN-SECRET"},
         {"attach-zip.pdf", {0, 0, 1000, 1000}, "EmbeddedFile"},
+        {"inline3.pdf", {90, 690, 400, 730}, "INLINE3-SECRET"},
+        {"struct_mcr.pdf", {90, 690, 400, 730}, "MCR-ONLY-SSN"},
+        {"pattern_nested.pdf", {0, 0, 1000, 1000}, "NESTED-PATTERN-SECRET"},
     };
     char path[1200];
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
@@ -479,7 +482,7 @@ static void test_security_pocs(void) {
     const char *crashers[] = {"annots_negref.pdf", "bigtr.pdf", "fields_dag.pdf", "img_rowbytes_overflow.pdf", "inflate_exact.pdf",
                               "objstm_neg.pdf", "objstm_quad.pdf", "pagedag.pdf", "predictor.pdf", "sharedform.pdf", "sharedres.pdf",
                               "uaf_popup_page.pdf", "uaf_popup_self.pdf", "uaf_annot_page.pdf", "uaf_image_is_page.pdf", "uaf_selfform.pdf",
-                              "formfan.pdf", "parentchain.pdf"};
+                              "formfan.pdf", "parentchain.pdf", "decode_amp.pdf"};
     for (size_t i = 0; i < sizeof crashers / sizeof crashers[0]; i++) {
         snprintf(path, sizeof path, "%s/../security/%s", g_dir, crashers[i]);
         int len;
