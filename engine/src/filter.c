@@ -8,7 +8,7 @@ static unsigned char *inflate_impl(const unsigned char *in, size_t inlen, size_t
     tinfl_decompressor inf;
     tinfl_init(&inf);
     size_t cap = inlen * 4 + 1024, len = 0, inpos = 0;
-    unsigned char *out = (unsigned char *)malloc(cap);
+    unsigned char *out = (unsigned char *)malloc(cap + 1); /* +1: callers NUL-terminate */
     int flags = (zlib_hdr ? TINFL_FLAG_PARSE_ZLIB_HEADER : 0) | TINFL_FLAG_HAS_MORE_INPUT;
     *ok = 0;
     for (;;) {
@@ -20,7 +20,16 @@ static unsigned char *inflate_impl(const unsigned char *in, size_t inlen, size_t
         inpos += in_bytes; len += out_bytes;
         if (st == TINFL_STATUS_DONE) { *ok = 1; break; }
         if (st == TINFL_STATUS_HAS_MORE_OUTPUT) {
-            cap *= 2; out = (unsigned char *)realloc(out, cap); continue;
+            /* Deflate cannot expand more than ~1032:1; anything beyond that is miniz synthesising
+             * data from zero padding after the input ran out (an unbounded "bomb"). */
+            size_t limit = PN_MAX_STREAM;
+            if ((uint64_t)inlen * 1040u + 65536u < (uint64_t)limit) limit = (size_t)((uint64_t)inlen * 1040u + 65536u);
+            if (cap >= limit) break;
+            size_t ncap = cap * 2 > limit ? limit : cap * 2; /* never grow past the limit */
+            unsigned char *nout = (unsigned char *)realloc(out, ncap + 1);
+            if (!nout) break;
+            out = nout; cap = ncap;
+            continue;
         }
         if (st == TINFL_STATUS_NEEDS_MORE_INPUT) {
             if (inpos >= inlen) { *ok = len > 0; break; } /* truncated: keep what we have */
@@ -58,9 +67,9 @@ static unsigned char *apply_predictor(pn_obj *parms, unsigned char *data, size_t
     int colors = (int)pn_int(pn_dict_get(parms, "Colors"), 1);
     int bpc = (int)pn_int(pn_dict_get(parms, "BitsPerComponent"), 8);
     int columns = (int)pn_int(pn_dict_get(parms, "Columns"), 1);
-    if (colors < 1) colors = 1;
-    if (bpc < 1) bpc = 8;
-    if (columns < 1) columns = 1;
+    if (colors < 1 || colors > 32) colors = 1;
+    if (bpc != 1 && bpc != 2 && bpc != 4 && bpc != 8 && bpc != 16) bpc = 8;
+    if (columns < 1 || columns > (1 << 24)) columns = 1;
     int bpp = (colors * bpc + 7) / 8;
     size_t rowlen = ((size_t)colors * bpc * columns + 7) / 8;
     if (pred == 2) { /* TIFF, 8-bit only */
@@ -147,7 +156,7 @@ static unsigned char *a85_decode(const unsigned char *in, size_t n, size_t *ol) 
 static unsigned char *rl_decode(const unsigned char *in, size_t n, size_t *ol) {
     pn_buf b; pn_buf_init(&b);
     size_t i = 0;
-    while (i < n) {
+    while (i < n && b.len < PN_MAX_STREAM) {
         int len = in[i++];
         if (len == 128) break;
         if (len < 128) { size_t k = (size_t)len + 1; if (i + k > n) k = n - i; pn_buf_put(&b, in + i, k); i += k; }
@@ -170,6 +179,7 @@ static unsigned char *lzw_decode(const unsigned char *in, size_t n, size_t *ol, 
         if (bits < codelen) break;
         int code = (int)((bitbuf >> (bits - codelen)) & ((1u << codelen) - 1));
         bits -= codelen;
+        if (b.len > PN_MAX_STREAM) break; /* decompression bomb */
         if (code == 256) { next = 258; codelen = 9; prev = -1; continue; }
         if (code == 257) break;
         int cur = code, first;

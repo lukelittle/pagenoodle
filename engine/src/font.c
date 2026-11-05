@@ -169,6 +169,11 @@ static void parse_cmap(pn_font *f, const unsigned char *data, size_t len, int wa
     if (f->ntu > 1) qsort(f->tu, (size_t)f->ntu, sizeof(pn_tu_entry), tu_cmp);
 }
 
+static int cidw_cmp(const void *a, const void *b) {
+    const pn_cid_w *x = (const pn_cid_w *)a, *y = (const pn_cid_w *)b;
+    return x->c0 < y->c0 ? -1 : x->c0 > y->c0;
+}
+
 /* ---------- font loading ---------- */
 static void load_simple_encoding(pn_doc *doc, pn_font *f, pn_obj *fd, const char *subtype, int b14) {
     const unsigned short *base = pn_enc_std;
@@ -222,12 +227,12 @@ pn_font *pn_font_load(pn_doc *doc, pn_obj *fd, pn_font **cache) {
         f->dw = pn_num(pn_get(doc, cid, "DW"), 1000);
         pn_obj *w = pn_get(doc, cid, "W");
         int cap = 0;
-        for (int i = 0; i < pn_arr_len(w);) {
+        for (int i = 0; i < pn_arr_len(w) && f->ncidw < PN_MAX_CIDW;) {
             pn_obj *a = pn_resolve(doc, pn_arr_get(w, i));
             pn_obj *b = pn_resolve(doc, pn_arr_get(w, i + 1));
             if (pn_is(b, PN_ARRAY)) {
                 unsigned c0 = (unsigned)pn_int(a, 0);
-                for (int k = 0; k < pn_arr_len(b); k++) {
+                for (int k = 0; k < pn_arr_len(b) && f->ncidw < PN_MAX_CIDW; k++) {
                     if (f->ncidw == cap) { cap = cap ? cap * 2 : 64; f->cidw = (pn_cid_w *)realloc(f->cidw, sizeof(pn_cid_w) * (size_t)cap); }
                     f->cidw[f->ncidw].c0 = f->cidw[f->ncidw].c1 = c0 + (unsigned)k;
                     f->cidw[f->ncidw].w = pn_num(pn_resolve(doc, pn_arr_get(b, k)), f->dw);
@@ -245,6 +250,7 @@ pn_font *pn_font_load(pn_doc *doc, pn_obj *fd, pn_font **cache) {
                 i += 3;
             }
         }
+        if (f->ncidw > 1) qsort(f->cidw, (size_t)f->ncidw, sizeof(pn_cid_w), cidw_cmp);
         desc = pn_get(doc, cid, "FontDescriptor");
         pn_obj *enc = pn_get(doc, fd, "Encoding");
         if (pn_is(enc, PN_STREAM)) {
@@ -317,7 +323,9 @@ int pn_font_next_code(pn_font *f, const unsigned char *s, int len, unsigned *cod
 
 double pn_font_width(pn_font *f, unsigned code) {
     if (!f->composite) return code < 256 ? f->widths[code] : 0;
-    for (int i = 0; i < f->ncidw; i++) if (code >= f->cidw[i].c0 && code <= f->cidw[i].c1) return f->cidw[i].w;
+    int lo = 0, hi = f->ncidw - 1, best = -1; /* sorted by c0: last range starting at or before code */
+    while (lo <= hi) { int mid = (lo + hi) / 2; if (f->cidw[mid].c0 <= code) { best = mid; lo = mid + 1; } else hi = mid - 1; }
+    if (best >= 0 && code <= f->cidw[best].c1) return f->cidw[best].w;
     return f->dw;
 }
 

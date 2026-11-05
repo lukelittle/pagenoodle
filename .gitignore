@@ -10,3 +10,4 @@ web/playwright-report/
 .DS_Store
 *.local.mjs
 engine/build-wasm/
+engine/build-fuzz/

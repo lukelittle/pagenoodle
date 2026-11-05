@@ -1,5 +1,5 @@
 // Compare two versions: side-by-side text with additions/deletions highlighted + per-page summary.
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { useApp, withBusy, newId, toast } from '../store/app';
 import { engine } from '../engine/client';
 import { compareDocs, type CompareResult } from '../lib/diff';
@@ -10,7 +10,17 @@ interface Pick {
   key: string;
 }
 
+// documents opened only for comparison; released when the Compare view closes
+const compareKeys = new Set<string>();
+
 export function Compare() {
+  useEffect(
+    () => () => {
+      for (const k of compareKeys) engine.forget(k);
+      compareKeys.clear();
+    },
+    [],
+  );
   const st = useApp();
   const sources = Object.values(st.doc.sources);
   const [a, setA] = useState<Pick | null>(null);
@@ -23,6 +33,7 @@ export function Compare() {
       const key = newId('cmp');
       await engine.open(key, new Uint8Array(await f.arrayBuffer()));
       set({ name: f.name, key });
+      compareKeys.add(key);
     });
   };
   const run = async () => {

@@ -8,6 +8,7 @@ typedef struct {
     int nargs;
     unsigned char *inl; /* inline image data for BI */
     size_t inl_len;
+    int ambiguous;      /* BI whose data contains another plausible end marker (renderers may differ) */
 } pn_op;
 
 typedef struct {

@@ -52,6 +52,7 @@ export interface OverlayImage {
 export type EditOp =
   | { type: 'overlay'; page: number; ops: string; images?: OverlayImage[] }
   | { type: 'redact'; page: number; rects: number[][]; fill: number }
+  | { type: 'scrubTerm'; term: string }
   | { type: 'formSet'; id: number; value: string }
   | { type: 'formFlatten' }
   | {

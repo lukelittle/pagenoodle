@@ -13,7 +13,9 @@ void pn_buf_reserve(pn_buf *b, size_t extra) {
     if (b->len + extra + 1 <= b->cap) return;
     size_t nc = b->cap ? b->cap * 2 : 256;
     while (nc < b->len + extra + 1) nc *= 2;
-    b->data = (unsigned char *)realloc(b->data, nc);
+    unsigned char *nd = (unsigned char *)realloc(b->data, nc);
+    if (!nd) abort(); /* out of memory: stop cleanly rather than write through NULL */
+    b->data = nd;
     b->cap = nc;
 }
 void pn_buf_put(pn_buf *b, const void *d, size_t n) {

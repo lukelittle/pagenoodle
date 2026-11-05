@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
-import { useApp, setState, undo, redo, addFiles, clearAll, type Mode } from '../store/app';
+import { useApp, setState, undo, redo, addFiles, clearAll, getState, toast, type Mode } from '../store/app';
 import { Icon, Mascot, BusyOverlay, Toasts, Celebrate } from './ui';
 import { Organize } from './Organize';
 import { Editor } from './Editor';
@@ -27,7 +27,7 @@ function useOfflineStatus() {
     const on = () => setOnline(navigator.onLine);
     window.addEventListener('online', on);
     window.addEventListener('offline', on);
-    if ('serviceWorker' in navigator) navigator.serviceWorker.ready.then(() => setReady(true)).catch(() => {});
+    if (navigator.serviceWorker) navigator.serviceWorker.ready.then(() => setReady(true)).catch(() => {});
     return () => {
       window.removeEventListener('online', on);
       window.removeEventListener('offline', on);
@@ -103,6 +103,11 @@ export function App() {
     const drop = (e: DragEvent) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
+      if (getState().busy) {
+        depth = 0;
+        setDragging(false);
+        return toast('Hang on — still working on the last thing.');
+      }
       depth = 0;
       setDragging(false);
       const files = [...(e.dataTransfer?.files ?? [])];
@@ -113,6 +118,7 @@ export function App() {
     window.addEventListener('dragover', over);
     window.addEventListener('drop', drop);
     const key = (e: KeyboardEvent) => {
+      if (getState().busy) return; // no shortcuts while an operation runs
       const mod = e.ctrlKey || e.metaKey;
       const t = e.target as HTMLElement;
       const typing = t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable;
@@ -141,6 +147,7 @@ export function App() {
       }
     ).launchQueue;
     lq?.setConsumer(async (p) => {
+      if (getState().busy) return;
       const files = await Promise.all(p.files.map((h) => h.getFile()));
       if (files.length) void addFiles(files);
     });
@@ -176,7 +183,7 @@ export function App() {
       <a class="skip-link" href="#main">
         Skip to content
       </a>
-      <header class="header">
+      <header class="header" inert={!!st.busy}>
         <button class="brand" onClick={() => setState({ mode: 'organize' })}>
           <Mascot size={48} wiggle={!!st.busy} />
           <span>
@@ -225,7 +232,7 @@ export function App() {
           </button>
         )}
       </header>
-      <nav class="tabs" role="tablist" aria-label="Sections">
+      <nav class="tabs" role="tablist" aria-label="Sections" inert={!!st.busy}>
         {TABS.map(([m, label, icon]) => (
           <button
             key={m}
@@ -240,7 +247,7 @@ export function App() {
           </button>
         ))}
       </nav>
-      <main id="main" tabIndex={-1}>
+      <main id="main" tabIndex={-1} inert={!!st.busy}>
         {body}
       </main>
       <BusyOverlay />

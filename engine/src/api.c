@@ -199,8 +199,8 @@ NOODLE_API int nd_redact(int h, int page, const double *r, int n, int fill_rgb) 
     int rc = pn_redact_page(d, page, rects, n, fill_rgb, &st, &removed);
     free(rects);
     out_reset();
-    pn_buf_printf(&g_out, "{\"ok\":%s,\"glyphs\":%d,\"imagesRemoved\":%d,\"imagesScrubbed\":%d,\"forms\":%d,\"annots\":%d,\"removedText\":",
-                  rc == 0 ? "true" : "false", st.glyphs, st.images_removed, st.images_scrubbed, st.forms, st.annots);
+    pn_buf_printf(&g_out, "{\"ok\":%s,\"tooComplex\":%s,\"glyphs\":%d,\"imagesRemoved\":%d,\"imagesScrubbed\":%d,\"forms\":%d,\"annots\":%d,\"removedText\":",
+                  rc == 0 ? "true" : "false", st.too_complex ? "true" : "false", st.glyphs, st.images_removed, st.images_scrubbed, st.forms, st.annots);
     pn_json_str(&g_out, removed.data ? (const char *)removed.data : "", (int)removed.len);
     pn_buf_puts(&g_out, ",\"needRaster\":[");
     int first = 1;
@@ -225,6 +225,15 @@ NOODLE_API int nd_verify(int h, int page, const double *r, int n) {
     pn_buf_putc(&g_out, '}');
     pn_buf_free(&leaked);
     return cnt;
+}
+
+/* Remove a term from annotations, form values, bookmarks and metadata (not page content). */
+NOODLE_API int nd_scrub_term(int h, const char *term) { return D(h) ? pn_scrub_term(D(h), term) : -1; }
+/* Where does a term still occur? JSON {"text":n,"strings":n,"streams":n}; returns the total. */
+NOODLE_API int nd_scan_term(int h, const char *term) {
+    if (!D(h)) return -1;
+    out_reset();
+    return pn_scan_term(D(h), term, &g_out);
 }
 
 /* forms */

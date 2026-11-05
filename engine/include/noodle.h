@@ -57,6 +57,8 @@ NOODLE_API int nd_search(int h, const char *needle, int ci);
 NOODLE_API int nd_redact(int h, int page, const double *rects, int n, int fill_rgb);
 NOODLE_API void nd_redact_mode(int drop_undecodable);
 NOODLE_API int nd_stream_raw(int h, int num);
+NOODLE_API int nd_scrub_term(int h, const char *term);
+NOODLE_API int nd_scan_term(int h, const char *term);
 NOODLE_API int nd_verify(int h, int page, const double *rects, int n);
 
 NOODLE_API int nd_forms(int h);

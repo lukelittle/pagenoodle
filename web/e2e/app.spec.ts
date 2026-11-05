@@ -1,7 +1,7 @@
 // End-to-end tests against the production build (vite preview).
 import { test, expect, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
@@ -38,7 +38,7 @@ test.beforeEach(async ({ page }) => {
   // Fail any test that makes a request to another origin.
   page.on('request', (r) => {
     const u = new URL(r.url());
-    if (u.hostname !== 'localhost' && !u.hostname.endsWith('.invalid')) throw new Error(`External request: ${r.url()}`);
+    if (u.hostname !== 'localhost' && u.hostname !== '127.0.0.1' && !u.hostname.endsWith('.invalid')) throw new Error(`External request: ${r.url()}`);
   });
 });
 
@@ -100,8 +100,8 @@ test('true redaction removes the text and is verified', async ({ page }, testInf
   await page.keyboard.press('Enter');
   await page.getByTestId('apply-redaction').click();
   const result = page.getByTestId('redaction-result');
-  await expect(result).toContainText('0 characters');
-  await expect(result).toContainText('appears nowhere');
+  await expect(result).toContainText('no characters');
+  await expect(result).toContainText('was not found');
   await page.keyboard.press('Escape');
   const { path } = await download(page, testInfo);
   const raw = readFileSync(path).toString('latin1');
@@ -220,4 +220,91 @@ test('accessibility: no serious axe violations on main views', async ({ page }) 
     const serious = r.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
     expect(serious.map((v) => `${tab}: ${v.id} ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
   }
+});
+
+// ---------- regressions from the security review ----------
+
+async function drawBox(page: Page, x0: number, y0: number, x1: number, y1: number, pageW = 612, pageH = 792) {
+  // coordinates in PDF user space (unrotated page); converts to the on-screen overlay
+  const ov = (await page.getByTestId('redact-overlay').boundingBox())!;
+  const sx = ov.width / pageW,
+    sy = ov.height / pageH;
+  await page.mouse.move(ov.x + x0 * sx, ov.y + (pageH - y1) * sy);
+  await page.mouse.down();
+  await page.mouse.move(ov.x + x1 * sx, ov.y + (pageH - y0) * sy, { steps: 4 });
+  await page.mouse.up();
+}
+
+test('find & redact also removes the term from form values, notes, bookmarks and metadata', async ({ page }, testInfo) => {
+  await open(page, [fx('elsewhere.pdf')]);
+  await page.getByTestId('tab-redact').click();
+  await page.getByTestId('redact-search').fill('John Smith');
+  await page.keyboard.press('Enter');
+  await page.getByTestId('apply-redaction').click();
+  await expect(page.getByTestId('redaction-result')).toContainText('not found in the page text, annotations, form fields, bookmarks');
+  await page.keyboard.press('Escape');
+  const { path } = await download(page, testInfo);
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(path)) }).promise;
+  const text = (await (await doc.getPage(1)).getTextContent()).items.map((i) => ('str' in i ? i.str : '')).join(' ');
+  expect(text).not.toMatch(/John\s*Smith/i);
+  expect(text).toContain('Emergency contact');
+  const annots = JSON.stringify(await (await doc.getPage(1)).getAnnotations());
+  expect(annots).not.toContain('John Smith');
+  expect(JSON.stringify((await doc.getOutline()) ?? [])).not.toContain('John Smith');
+  expect(JSON.stringify((await doc.getMetadata()).info)).not.toContain('John Smith');
+});
+
+for (const [file, secret] of [
+  ['rot135.pdf', 'ROTSECRET'],
+  ['crop.pdf', 'CROPSECRET'],
+  ['nested.pdf', 'TOPSECRET'],
+]) {
+  test(`a hand-drawn box over visible text really removes it (${file})`, async ({ page }, testInfo) => {
+    await open(page, [fx(file)]);
+    await page.getByTestId('tab-redact').click();
+    await drawBox(page, 60, 490, 450, 530);
+    await page.getByTestId('apply-redaction').click();
+    await expect(page.getByTestId('redaction-result')).toContainText('no characters');
+    await page.keyboard.press('Escape');
+    const { path } = await download(page, testInfo);
+    const res = await pdfText(path);
+    expect(res.text.join(' ')).not.toContain(secret);
+    expect(res.text[0]).toContain('Public header');
+  });
+}
+
+test('malformed imported recipes are rejected and cannot break the Recipes view', async ({ page }, testInfo) => {
+  await page.goto('/');
+  await page.getByTestId('tab-recipes').click();
+  const bad = testInfo.outputPath('bad.json');
+  writeFileSync(bad, JSON.stringify({ pagenoodle: 'recipe', name: 'evil', steps: [{ op: 'redactText', terms: 'oops' }] }));
+  await page.locator('input[type=file][accept*=json]').setInputFiles(bad);
+  await expect(page.getByText(/Invalid “redactText” step/)).toBeVisible();
+  await expect(page.getByTestId('recipe-card')).toHaveCount(0);
+  await page.reload();
+  await page.getByTestId('tab-recipes').click();
+  await expect(page.getByTestId('start-recording')).toBeVisible();
+});
+
+test('the app refuses to run inside a frame', async ({ page }) => {
+  // an attacker page on another origin (no CSP of its own) trying to embed the app
+  await page.route('**/framing-test.html', (r) =>
+    r.fulfill({ contentType: 'text/html', body: '<iframe src="./" width="800" height="600"></iframe>' }),
+  );
+  await page.goto('/framing-test.html');
+  await expect(page.frameLocator('iframe').locator('#app')).toContainText('cannot run inside a frame');
+});
+
+test('redaction removes embedded attachments that could hold the original', async ({ page }, testInfo) => {
+  await open(page, [join(FX, '..', 'security', 'attach-zip.pdf')]);
+  await page.getByTestId('tab-redact').click();
+  await page.getByTestId('redact-search').fill('John Smith');
+  await page.keyboard.press('Enter');
+  await page.getByTestId('apply-redaction').click();
+  await expect(page.getByTestId('redaction-result')).toContainText('Attachments and scripts were removed');
+  await page.keyboard.press('Escape');
+  const { path } = await download(page, testInfo);
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(path)) }).promise;
+  expect(await doc.getAttachments()).toBeNull();
+  expect(readFileSync(path).toString('latin1')).not.toContain('EmbeddedFile');
 });

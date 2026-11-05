@@ -32,7 +32,17 @@ typedef struct walker {
     pn_redact_stats *stats;
     pn_buf removed_text;
     int depth;
+    pn_obj *active[32]; int nactive; /* forms currently being drawn (no re-entry) */
+    long long ops;                   /* operator budget per page (crafted fan-out is exponential) */
+    int overbudget;
 } walker;
+
+#define PN_OP_BUDGET 4000000LL
+
+static int form_active(walker *w, pn_obj *f) {
+    for (int i = 0; i < w->nactive; i++) if (w->active[i] == f) return 1;
+    return 0;
+}
 
 static void add_glyph(walker *w, const unsigned *uni, int nuni, pn_rect box, double size) {
     if (w->ng == w->capg) { w->capg = w->capg ? w->capg * 2 : 1024; w->g = (glyph *)realloc(w->g, sizeof(glyph) * (size_t)w->capg); }
@@ -93,8 +103,8 @@ static int show_text(walker *w, gstate *g, pn_mat *tm, pn_obj **items, int nitem
         pn_obj *o = items[it];
         if (pn_is_number(o)) {
             double n = pn_num(o, 0);
-            double tx = -n / 1000.0 * scale;
-            tm->e += tx * tm->a; tm->f += tx * tm->b;
+            if (f->vertical) { double ty = -n / 1000.0 * g->tfs; tm->e += ty * tm->c; tm->f += ty * tm->d; }
+            else { double tx = -n / 1000.0 * scale; tm->e += tx * tm->a; tm->f += tx * tm->b; }
             FLUSH_SEG();
             pending += n; have_pending = 1;
             continue;
@@ -110,11 +120,26 @@ static int show_text(walker *w, gstate *g, pn_mat *tm, pn_obj **items, int nitem
             double w0 = pn_font_width(f, code) / 1000.0;
             pn_mat fm = {g->tfs * g->th, 0, 0, g->tfs, 0, g->trise};
             pn_mat trm = pn_mat_mul(pn_mat_mul(fm, *tm), g->ctm);
+            double spacing = g->tc + ((nb == 1 && code == 32) ? g->tw : 0);
             pn_rect gr = {0, f->descent, w0 > 0 ? w0 : 0.3, f->ascent};
+            double adv; /* displacement along the writing direction, in text space */
+            if (f->vertical) {
+                /* vertical writing: origin at the top centre of the glyph, advancing downwards (default DW2) */
+                gr.x0 = -(w0 > 0 ? w0 : 1) / 2; gr.x1 = (w0 > 0 ? w0 : 1) / 2; gr.y0 = -1.0; gr.y1 = 0;
+                fm.a = g->tfs;
+                trm = pn_mat_mul(pn_mat_mul(fm, *tm), g->ctm);
+                adv = -g->tfs + spacing;
+            } else adv = (w0 * g->tfs + spacing) * g->th;
             pn_rect box = pn_rect_transform(gr, trm);
-            double adv = (w0 * g->tfs + g->tc + ((nb == 1 && code == 32) ? g->tw : 0)) * g->th;
+            if (g->tfs == 0) { /* zero-size text is invisible but still extractable: use its origin point */
+                double ox, oy;
+                pn_mat_apply(trm, 0, 0, &ox, &oy);
+                box.x0 = box.x1 = ox; box.y0 = box.y1 = oy;
+            }
             if (w->redact) {
-                int rm = g->tfs != 0 && glyph_hits(w, box);
+                int rm = 0;
+                if (g->tfs == 0) { for (int k = 0; k < w->nrects; k++) if (box.x0 >= w->rects[k].x0 && box.x0 <= w->rects[k].x1 && box.y0 >= w->rects[k].y0 && box.y0 <= w->rects[k].y1) rm = 1; }
+                else rm = glyph_hits(w, box);
                 if (rm) {
                     removed_any = 1;
                     w->stats->glyphs++;
@@ -122,19 +147,21 @@ static int show_text(walker *w, gstate *g, pn_mat *tm, pn_obj **items, int nitem
                     int nu = pn_font_unicode(f, code, nb, uni, 4);
                     for (int k = 0; k < nu; k++) if (w->removed_text.len < 4000) put_utf8(&w->removed_text, uni[k]);
                     FLUSH_SEG();
-                    if (fabs(scale) > 1e-9) { pending += -adv / scale * 1000.0; have_pending = 1; }
+                    double denom = f->vertical ? g->tfs : scale;
+                    if (fabs(denom) > 1e-9) { pending += -adv / denom * 1000.0; have_pending = 1; }
                 } else {
                     if (have_pending) FLUSH_NUM();
                     pn_buf_put(&seg, s + pos, (size_t)nb);
                 }
-            } else if (g->tfs != 0) {
+            } else {
                 unsigned uni[4];
                 int nu = pn_font_unicode(f, code, nb, uni, 4);
                 if (nu == 0) { uni[0] = 0xFFFD; nu = 1; }
                 double size = fabs(g->tfs) * sqrt(fabs(g->ctm.a * g->ctm.d - g->ctm.b * g->ctm.c)) * sqrt(fabs(tm->a * tm->d - tm->b * tm->c));
                 add_glyph(w, uni, nu, box, size);
             }
-            tm->e += adv * tm->a; tm->f += adv * tm->b;
+            if (f->vertical) { tm->e += adv * tm->c; tm->f += adv * tm->d; }
+            else { tm->e += adv * tm->a; tm->f += adv * tm->b; }
             pos += nb;
         }
     }
@@ -150,67 +177,124 @@ static pn_obj *lookup_res(pn_doc *doc, pn_obj *res, const char *cat, const char 
     return pn_get(doc, pn_get(doc, res, cat), name);
 }
 
-static pn_obj *private_xobjects(walker *w, pn_obj *out_res) {
-    (void)w;
-    pn_obj *x = pn_dict_get(out_res, "XObject");
-    if (pn_is(x, PN_DICT)) return x; /* already a direct dict owned by out_res (private copy) */
-    return pn_res_subdict(w->doc, out_res, "XObject");
+/* Object number behind a resource name (all XObjects are streams, hence indirect). */
+static int lookup_num(pn_doc *doc, pn_obj *res, const char *cat, const char *name) {
+    pn_obj *r = pn_dict_get(pn_get(doc, res, cat), name);
+    return (r && r->type == PN_REF && r->u.ref.num > 0 && r->u.ref.num < doc->nxref) ? r->u.ref.num : 0;
 }
 
-static void walk(walker *w, const unsigned char *data, size_t len, pn_obj *res, pn_mat basectm, pn_buf *out, pn_obj *out_res, int toplevel);
+static void walk(walker *w, const unsigned char *data, size_t len, pn_obj *res, pn_mat basectm, pn_buf *out, int toplevel);
 
-/* Drop XObject resource entries that the (rewritten) content no longer uses, so replaced
- * originals are not kept alive in the saved file. */
-static void prune_xobjects(pn_doc *doc, pn_obj *res, const unsigned char *data, size_t len) {
-    pn_obj *xo = pn_dict_get(res, "XObject");
-    if (!xo) return;
-    if (xo->type == PN_REF) xo = pn_res_subdict(doc, res, "XObject");
-    if (!pn_is(xo, PN_DICT)) return;
-    pn_content *c = pn_content_parse(data, len);
-    for (int i = pn_dict_len(xo) - 1; i >= 0; i--) {
-        const char *k = pn_dict_key(xo, i);
-        int used = 0;
-        for (int j = 0; j < c->n && !used; j++)
-            if (!strcmp(c->ops[j].name, "Do") && c->ops[j].nargs && !strcmp(pn_name(c->ops[j].args[0]), k)) used = 1;
-        if (!used) pn_dict_del(xo, k);
+/* Can this content stream show text, images, forms, shadings or other patterns? */
+static int content_is_risky(pn_doc *doc, pn_obj *stm, int text_only) {
+    size_t pl; int pok;
+    unsigned char *pdat = pn_stream_decode(doc, stm, &pl, &pok);
+    int risky = !pdat || !pok;
+    if (pdat && !risky) {
+        pn_content *c = pn_content_parse(pdat, pl);
+        for (int i = 0; i < c->n && !risky; i++) {
+            const char *n = c->ops[i].name;
+            risky = !strcmp(n, "Tj") || !strcmp(n, "TJ") || !strcmp(n, "'") || !strcmp(n, "\"");
+            if (!text_only) risky = risky || !strcmp(n, "Do") || !strcmp(n, "BI") || !strcmp(n, "sh") || ((!strcmp(n, "scn") || !strcmp(n, "SCN")) && c->ops[i].nargs && pn_is(c->ops[i].args[c->ops[i].nargs - 1], PN_NAME));
+        }
+        pn_content_free(c);
     }
-    pn_content_free(c);
+    free(pdat);
+    return risky;
 }
 
-static int redact_form(walker *w, pn_obj *form, pn_obj *res, pn_mat ctm, pn_obj *out_res, char *newname) {
+/* A tiling pattern whose cell content can show text or images (directly, or through nested patterns,
+ * forms or shadings) is emptied in place when used on a redacted page — fail closed: its geometry
+ * repeats across the page and is not analysed. Its resources go too, so nothing nested survives. */
+int pn_redact_pattern(pn_doc *doc, pn_obj *pat) {
+    if (!pn_is(pat, PN_STREAM) || pn_int(pn_get(doc, pat, "PatternType"), 0) != 1) return 0;
+    if (!content_is_risky(doc, pat, 0)) return 0;
+    pn_stream_set(pat, (const unsigned char *)"", 0, 0);
+    pn_obj *old = pn_dict_get(pat, "Resources");
+    if (old) { pn_retire(doc, old); pn_dict_put(pat, "Resources", pn_new_dict()); }
+    return 1;
+}
+
+/* Type3 glyph procedures that draw text or images (instead of a glyph shape) are emptied. */
+int pn_redact_type3(pn_doc *doc, pn_obj *font) {
+    if (!pn_is(font, PN_DICT) || !pn_is_name(pn_get(doc, font, "Subtype"), "Type3")) return 0;
+    pn_obj *procs = pn_get(doc, font, "CharProcs");
+    int n = 0;
+    for (int i = 0; i < pn_dict_len(procs); i++) {
+        pn_obj *cp = pn_resolve(doc, pn_dict_val(procs, i));
+        if (pn_is(cp, PN_STREAM) && content_is_risky(doc, cp, 1)) { /* bitmap glyphs (BI) are normal */ pn_stream_set(cp, (const unsigned char *)"", 0, 0); n++; }
+    }
+    if (n) { pn_obj *old = pn_dict_get(font, "Resources"); if (old) { pn_retire(doc, old); pn_dict_put(font, "Resources", pn_new_dict()); } }
+    return n;
+}
+
+/* Alternate text that may repeat redacted content */
+static void strip_alt_text(pn_obj *d) {
+    pn_dict_del(d, "ActualText");
+    pn_dict_del(d, "Alt");
+    pn_dict_del(d, "E");
+}
+
+/* Redact a form XObject IN PLACE: every use of the object (other pages, annotation appearances,
+ * the structure tree…) sees the redacted version, so the original can never survive in the file. */
+static void redact_form(walker *w, pn_obj *form, pn_obj *res, pn_mat ctm) {
     pn_mat fmat = pn_mat_from_array(w->doc, pn_get(w->doc, form, "Matrix"));
     pn_mat fctm = pn_mat_mul(fmat, ctm);
     pn_obj *fres = pn_get(w->doc, form, "Resources");
     if (!fres) fres = res;
-    size_t dl; int ok;
-    unsigned char *d = pn_stream_decode(w->doc, form, &dl, &ok);
-    if (!d) return 0;
-    pn_obj *nres = pn_is(fres, PN_DICT) ? pn_shallow_copy(fres) : pn_new_dict();
+    size_t dl = 0; int ok = 0;
+    unsigned char *d = w->overbudget ? NULL : pn_stream_decode(w->doc, form, &dl, &ok);
+    w->ops += 1 + (long long)(dl / 64); /* decoding work counts against the page budget */
     pn_buf ob; pn_buf_init(&ob);
-    int before = w->stats->glyphs + w->stats->images_removed + w->stats->images_scrubbed;
-    walk(w, d, dl, fres, fctm, &ob, nres, 0);
+    int before = w->stats->glyphs + w->stats->images_removed + w->stats->images_scrubbed + w->stats->forms;
+    if (d && ok && w->nactive < 32) {
+        w->active[w->nactive++] = form;
+        walk(w, d, dl, fres, fctm, &ob, 0);
+        w->nactive--;
+    } else w->stats->forms++; /* undecodable (or too deep) form under a box: empty it (fail closed) */
     free(d);
-    int changed = (w->stats->glyphs + w->stats->images_removed + w->stats->images_scrubbed) != before;
-    if (!changed) { pn_buf_free(&ob); pn_drop(nres); return 0; }
-    prune_xobjects(w->doc, nres, ob.data, ob.len);
-    pn_obj *nf = pn_new_stream(pn_shallow_copy(form->u.stm.dict), NULL, 0);
-    pn_stream_set(nf, ob.data, ob.len, 1);
-    pn_dict_put(nf, "Resources", nres);
+    int changed = (w->stats->glyphs + w->stats->images_removed + w->stats->images_scrubbed + w->stats->forms) != before;
+    if (changed) {
+        pn_stream_set(form, ob.data ? ob.data : (const unsigned char *)"", ob.len, 1);
+        /* Objects the new content no longer draws must not stay reachable through /Resources
+         * (otherwise e.g. a dropped nested form would survive in the file). Private deep copy
+         * first so resource dicts shared with other forms/pages are not modified. */
+        pn_obj *own = pn_get(w->doc, form, "Resources");
+        if (pn_is(own, PN_DICT)) {
+            pn_obj *nres = pn_deep_copy_direct(own);
+            pn_obj *xo = pn_get(w->doc, nres, "XObject");
+            if (pn_is(xo, PN_DICT)) {
+                pn_obj *nx = pn_deep_copy_direct(xo);
+                pn_content *cc = pn_content_parse(ob.data ? ob.data : (const unsigned char *)"", ob.len);
+                for (int i = pn_dict_len(nx) - 1; i >= 0; i--) {
+                    const char *k = pn_dict_key(nx, i);
+                    int used = 0;
+                    for (int j = 0; j < cc->n && !used; j++)
+                        if (!strcmp(cc->ops[j].name, "Do") && cc->ops[j].nargs && !strcmp(pn_name(cc->ops[j].args[0]), k)) used = 1;
+                    if (!used) pn_dict_del(nx, k);
+                }
+                pn_content_free(cc);
+                pn_dict_put(nres, "XObject", nx);
+            }
+            pn_retire(w->doc, own); /* outer walk frames may still be using the old dict */
+            pn_dict_put(form, "Resources", nres);
+        }
+        w->stats->forms++;
+    }
     pn_buf_free(&ob);
-    int num = pn_add_obj(w->doc, nf);
-    pn_obj *xo = private_xobjects(w, out_res);
-    pn_res_unique_name(w->doc, xo, "PnR", newname, 32);
-    pn_dict_put(xo, newname, pn_new_ref(num, 0));
-    w->stats->forms++;
-    return 1;
 }
 
-static void walk(walker *w, const unsigned char *data, size_t len, pn_obj *res, pn_mat basectm, pn_buf *out, pn_obj *out_res, int toplevel) {
-    if (w->depth > 12) { if (out) pn_buf_put(out, data, len); return; }
+static void walk(walker *w, const unsigned char *data, size_t len, pn_obj *res, pn_mat basectm, pn_buf *out, int toplevel) {
+    if (w->depth > 24) {
+        /* Too deeply nested to analyse. When redacting, fail closed: the nested content is dropped
+         * entirely rather than let anything under the box through unchanged. */
+        if (w->redact) w->stats->forms++;
+        return;
+    }
     w->depth++;
     pn_content *c = pn_content_parse(data, len);
-    gstate stack[64];
-    int sp = 0, qdepth = 0;
+    int scap = 64, sp = 0, qdepth = 0;
+    gstate *stack = (gstate *)malloc(sizeof(gstate) * (size_t)scap);
     gstate g;
     memset(&g, 0, sizeof g);
     g.ctm = basectm; g.th = 1;
@@ -221,8 +305,20 @@ static void walk(walker *w, const unsigned char *data, size_t len, pn_obj *res, 
         pn_obj **a = op->args;
         int na = op->nargs;
         int written = 0;
+        if (++w->ops > PN_OP_BUDGET && !w->overbudget) {
+            w->overbudget = 1;
+            if (w->redact) w->stats->too_complex = 1;
+        }
+        if (w->overbudget) {
+            if (!w->redact) break;
+            continue; /* redaction fails closed: the rest of this content is dropped */
+        }
 #define NUM(k) (na > (k) ? pn_num(a[k], 0) : 0)
-        if (!strcmp(nm, "q")) { if (sp < 64) stack[sp++] = g; qdepth++; }
+        if (!strcmp(nm, "q")) {
+            if (sp == scap) { scap *= 2; stack = (gstate *)realloc(stack, sizeof(gstate) * (size_t)scap); }
+            stack[sp++] = g;
+            qdepth++;
+        }
         else if (!strcmp(nm, "Q")) {
             if (sp > 0) g = stack[--sp];
             if (qdepth > 0) qdepth--;
@@ -236,6 +332,7 @@ static void walk(walker *w, const unsigned char *data, size_t len, pn_obj *res, 
         else if (!strcmp(nm, "Tf") && na >= 2) {
             g.tfs = NUM(1);
             pn_obj *fd = lookup_res(w->doc, res, "Font", pn_name(a[0]));
+            if (w->redact && fd && pn_redact_type3(w->doc, fd)) w->stats->forms++;
             g.font = fd ? pn_font_load(w->doc, fd, &w->fonts) : NULL;
         }
         else if (!strcmp(nm, "Tc")) g.tc = NUM(0);
@@ -243,7 +340,7 @@ static void walk(walker *w, const unsigned char *data, size_t len, pn_obj *res, 
         else if (!strcmp(nm, "Tz")) g.th = NUM(0) / 100.0;
         else if (!strcmp(nm, "TL")) g.tl = NUM(0);
         else if (!strcmp(nm, "Ts")) g.trise = NUM(0);
-        else if (!strcmp(nm, "Tr")) g.tr = (int)NUM(0);
+        else if (!strcmp(nm, "Tr")) { double v = NUM(0); g.tr = (v >= 0 && v <= 7) ? (int)v : 0; }
         else if (!strcmp(nm, "Td") && na >= 2) {
             pn_mat t = {1, 0, 0, 1, NUM(0), NUM(1)};
             tlm = pn_mat_mul(t, tlm); tm = tlm;
@@ -285,27 +382,42 @@ static void walk(walker *w, const unsigned char *data, size_t len, pn_obj *res, 
             }
             pn_drop(newtj);
         }
+        else if ((!strcmp(nm, "BDC") || !strcmp(nm, "DP")) && w->redact && na >= 2) {
+            /* replacement/alternate text in marked content could repeat what was redacted:
+             * inline property dicts and named ones from /Properties alike */
+            if (pn_is(a[1], PN_DICT)) strip_alt_text(a[1]);
+            else if (pn_is(a[1], PN_NAME)) {
+                pn_obj *pr = lookup_res(w->doc, res, "Properties", pn_name(a[1]));
+                if (pn_is(pr, PN_DICT)) strip_alt_text(pr);
+            }
+        }
+        else if ((!strcmp(nm, "scn") || !strcmp(nm, "SCN")) && w->redact && na >= 1 && pn_is(a[na - 1], PN_NAME)) {
+            pn_obj *pat = lookup_res(w->doc, res, "Pattern", pn_name(a[na - 1]));
+            if (pn_redact_pattern(w->doc, pat)) w->stats->forms++;
+        }
         else if (!strcmp(nm, "Do") && na >= 1) {
             pn_obj *xo = lookup_res(w->doc, res, "XObject", pn_name(a[0]));
             const char *st = pn_name(pn_get(w->doc, xo, "Subtype"));
-            if (!strcmp(st, "Image")) {
+            if (!strcmp(st, "Image") && pn_is(xo, PN_STREAM)) {
                 if (w->redact) {
                     pn_rect unit = {0, 0, 1, 1};
                     pn_rect bb = pn_rect_transform(unit, g.ctm);
                     if (hits(w, bb)) {
+                        int num = lookup_num(w->doc, res, "XObject", pn_name(a[0]));
                         int newnum = 0;
                         int r = pn_redact_image(w->doc, xo, g.ctm, w->rects, w->nrects, &newnum);
-                        if (r == 2) { w->stats->images_removed++; written = 1; }
-                        else if (r == 1 && out_res) {
-                            char newname[32];
-                            pn_obj *x = private_xobjects(w, out_res);
-                            pn_res_unique_name(w->doc, x, "PnI", newname, 32);
-                            pn_dict_put(x, newname, pn_new_ref(newnum, 0));
-                            pn_obj *nmo = pn_new_name(newname);
-                            pn_write_obj(out, nmo);
-                            pn_drop(nmo);
-                            pn_buf_puts(out, " Do\n");
+                        if (r == 1 && num) {
+                            /* scrubbed pixels replace the original object everywhere it is used */
+                            pn_obj *ns = pn_keep(pn_load(w->doc, newnum));
+                            pn_set_obj(w->doc, newnum, pn_null());
+                            w->doc->xref[newnum].type = 0;
+                            pn_set_obj(w->doc, num, ns);
                             w->stats->images_scrubbed++;
+                        } else if (r == 2 || r == 1) {
+                            /* cannot scrub safely: remove the image object itself, not just this use */
+                            if (num) pn_set_obj(w->doc, num, pn_null());
+                            if (r == 1 && newnum) { pn_set_obj(w->doc, newnum, pn_null()); w->doc->xref[newnum].type = 0; }
+                            w->stats->images_removed++;
                             written = 1;
                         }
                     }
@@ -322,32 +434,31 @@ static void walk(walker *w, const unsigned char *data, size_t len, pn_obj *res, 
                         if (fb.x0 > fb.x1) { double t = fb.x0; fb.x0 = fb.x1; fb.x1 = t; }
                         if (fb.y0 > fb.y1) { double t = fb.y0; fb.y0 = fb.y1; fb.y1 = t; }
                     }
-                    if (hits(w, pn_rect_transform(fb, fctm)) && out_res) {
-                        char newname[32];
-                        if (redact_form(w, xo, res, g.ctm, out_res, newname)) {
-                            pn_obj *nmo = pn_new_name(newname);
-                            pn_write_obj(out, nmo);
-                            pn_drop(nmo);
-                            pn_buf_puts(out, " Do\n");
-                            written = 1;
-                        }
-                    }
+                    if (form_active(w, xo)) { w->stats->forms++; written = 1; } /* self-drawing form: drop the call */
+                    else if (hits(w, pn_rect_transform(fb, fctm))) redact_form(w, xo, res, g.ctm);
                 } else {
-                    size_t dl; int ok;
-                    unsigned char *d = pn_stream_decode(w->doc, xo, &dl, &ok);
+                    size_t dl = 0; int ok = 0;
+                    unsigned char *d = (w->overbudget || form_active(w, xo)) ? NULL : pn_stream_decode(w->doc, xo, &dl, &ok);
+                    w->ops += 1 + (long long)(dl / 64);
                     pn_obj *fres = pn_get(w->doc, xo, "Resources");
-                    if (d) { walk(w, d, dl, fres ? fres : res, fctm, NULL, NULL, 0); free(d); }
+                    if (d && !form_active(w, xo) && w->nactive < 32) {
+                        w->active[w->nactive++] = xo;
+                        walk(w, d, dl, fres ? fres : res, fctm, NULL, 0);
+                        w->nactive--;
+                    }
+                    free(d);
                 }
             }
         }
         else if (!strcmp(nm, "BI") && w->redact) {
             pn_rect unit = {0, 0, 1, 1};
-            if (hits(w, pn_rect_transform(unit, g.ctm))) { w->stats->images_removed++; written = 1; }
+            if (op->ambiguous || hits(w, pn_rect_transform(unit, g.ctm))) { w->stats->images_removed++; written = 1; }
         }
 #undef NUM
         if (out && !written) pn_op_write(out, op);
     }
     if (out && toplevel) while (qdepth-- > 0) pn_buf_puts(out, "Q\n");
+    free(stack);
     pn_content_free(c);
     w->depth--;
 }
@@ -385,7 +496,9 @@ static walker *extract_page(pn_doc *doc, int pageidx) {
     if (!page) return w;
     size_t len;
     unsigned char *data = pn_page_content(doc, page, &len);
-    walk(w, data, len, pn_page_inherited(doc, page, "Resources"), pn_mat_identity(), NULL, NULL, 1);
+    pn_obj *res = pn_page_resources(doc, page);
+    walk(w, data, len, res, pn_mat_identity(), NULL, 1);
+    pn_drop(res);
     free(data);
     return w;
 }
@@ -570,14 +683,21 @@ int pn_redact_page_content(pn_doc *doc, int pageidx, const pn_rect *rects, int n
     w->doc = doc; w->redact = 1; w->rects = rects; w->nrects = nrects; w->stats = stats;
     size_t len;
     unsigned char *data = pn_page_content(doc, page, &len);
-    pn_obj *res = pn_page_inherited(doc, page, "Resources");
-    pn_obj *nres = pn_page_private_resources(doc, page); /* private shallow copy now on page */
+    pn_obj *res = pn_page_resources(doc, page);
+    pn_retire(doc, res); /* in-place redaction may replace objects reachable from it */
+    pn_drop(res);
     pn_buf out; pn_buf_init(&out);
     pn_buf_puts(&out, "q\n");
-    walk(w, data, len, res ? nres : nres, pn_mat_identity(), &out, nres, 1);
+    walk(w, data, len, res, pn_mat_identity(), &out, 1);
     pn_buf_puts(&out, "Q\n");
     free(data);
-    if (stats->images_removed || stats->images_scrubbed || stats->forms) prune_xobjects(doc, nres, out.data, out.len);
+    if (stats->too_complex) { /* refuse rather than silently truncate the page */
+        pn_buf_free(&out);
+        free_walker(w);
+        pn_set_error("This page is too complex to redact safely.");
+        return -1;
+    }
+    /* the old content stream object is replaced; shared XObjects were redacted in place */
     pn_page_set_content(doc, page, out.data, out.len);
     pn_buf_free(&out);
     if (removed_text) pn_buf_put(removed_text, w->removed_text.data, w->removed_text.len);

@@ -42,8 +42,10 @@ static void write_string(pn_buf *b, const unsigned char *s, int len, int hex) {
     pn_buf_putc(b, ')');
 }
 
+static int g_wdepth = 0;
 static void write_obj_ctx(wctx *w, pn_buf *b, pn_obj *o) {
-    if (!o) { pn_buf_puts(b, "null"); return; }
+    if (!o || g_wdepth > 256) { pn_buf_puts(b, "null"); return; }
+    g_wdepth++;
     int i;
     switch (o->type) {
     case PN_NULL: pn_buf_puts(b, "null"); break;
@@ -80,6 +82,7 @@ static void write_obj_ctx(wctx *w, pn_buf *b, pn_obj *o) {
         break;
     case PN_STREAM: write_obj_ctx(w, b, o->u.stm.dict); break;
     }
+    g_wdepth--;
 }
 
 void pn_write_obj(pn_buf *b, pn_obj *o) { write_obj_ctx(NULL, b, o); }

@@ -101,6 +101,11 @@ export async function withBusy<T>(
   label: string,
   fn: (ctx: { onProgress: (d: number, t: number) => void; signal: AbortSignal }) => Promise<T>,
 ): Promise<T | undefined> {
+  if (state.busy) {
+    // one operation at a time: concurrent edits could silently overwrite each other
+    toast('Hang on — still working on the last thing.');
+    return undefined;
+  }
   abort = new AbortController();
   const signal = abort.signal;
   setState({ busy: { label, done: 0, total: 0 } });
@@ -131,7 +136,13 @@ export function cancelBusy() {
 async function registerSource(name: string, bytes: Uint8Array): Promise<Source> {
   const key = newId('s');
   const info = await engine.open(key, bytes);
-  await loadPdf(key, bytes);
+  try {
+    await loadPdf(key, bytes);
+  } catch (e) {
+    engine.forget(key);
+    unloadPdf(key);
+    throw e;
+  }
   return { key, name, bytes, info };
 }
 
@@ -182,6 +193,19 @@ export function undo() {
   });
   toast('Undone ↩︎');
 }
+/** Throw away the current document and go back one step WITHOUT making it redoable
+ * (used when a redaction could not be verified: it must not be recoverable by "Redo"). */
+export function discardLast(expectedDoc: Doc) {
+  if (state.doc !== expectedDoc) return; // something else already changed it
+  const prev = state.past[state.past.length - 1];
+  if (!prev) return;
+  const dropped = state.doc;
+  state = { ...state, doc: prev, past: state.past.slice(0, -1), selected: [] };
+  gcSources([state.doc, ...state.past, ...state.future]);
+  void dropped;
+  listeners.forEach((l) => l());
+}
+
 export function redo() {
   const next = state.future[0];
   if (!next) return;

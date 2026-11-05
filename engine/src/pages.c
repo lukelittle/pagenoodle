@@ -9,6 +9,8 @@ struct pn_copymap {
     int *map;      /* src num -> dst num */
     char *allowed; /* page objects that may be copied */
     int n;
+    int *queue; int qlen, qcap; /* src objects allocated but not yet copied (iterative, no deep recursion) */
+    int draining;
 };
 
 pn_copymap *pn_copymap_new(pn_doc *src, pn_doc *dst) {
@@ -18,13 +20,32 @@ pn_copymap *pn_copymap_new(pn_doc *src, pn_doc *dst) {
     m->allowed = (char *)calloc((size_t)m->n, 1);
     return m;
 }
-void pn_copymap_free(pn_copymap *m) { if (!m) return; free(m->map); free(m->allowed); free(m); }
+void pn_copymap_free(pn_copymap *m) { if (!m) return; free(m->map); free(m->allowed); free(m->queue); free(m); }
 void pn_copymap_allow_page(pn_copymap *m, int num) { if (num > 0 && num < m->n) m->allowed[num] = 1; }
 int pn_copymap_lookup(pn_copymap *m, int num) { return (num > 0 && num < m->n) ? m->map[num] : 0; }
 
 static pn_obj *copy_direct(pn_copymap *m, pn_obj *o, int is_page);
 
+static pn_obj *copy_into(pn_copymap *m, pn_obj *o);
+
+/* Copy an object; referenced objects are allocated immediately and copied from a work queue,
+ * so long reference chains cannot exhaust the stack. */
 pn_obj *pn_copy_into(pn_copymap *m, pn_obj *o) {
+    pn_obj *r = copy_into(m, o);
+    if (!m->draining) {
+        m->draining = 1;
+        while (m->qlen > 0) {
+            int num = m->queue[--m->qlen];
+            pn_obj *src = pn_load(m->src, num);
+            int is_page = pn_is(src, PN_DICT) && pn_is_name(pn_dict_get(src, "Type"), "Page");
+            pn_set_obj(m->dst, m->map[num], src ? copy_direct(m, src, is_page) : pn_null());
+        }
+        m->draining = 0;
+    }
+    return r;
+}
+
+static pn_obj *copy_into(pn_copymap *m, pn_obj *o) {
     if (!o) return pn_null();
     if (o->type == PN_REF) {
         int num = o->u.ref.num;
@@ -37,19 +58,29 @@ pn_obj *pn_copy_into(pn_copymap *m, pn_obj *o) {
         if (pn_is(src, PN_DICT) && pn_is_name(pn_dict_get(src, "Type"), "Pages")) return pn_null();
         int dn = pn_add_obj(m->dst, pn_null());
         m->map[num] = dn;
-        pn_obj *c = copy_direct(m, src, is_page);
-        pn_set_obj(m->dst, dn, c);
+        if (m->qlen == m->qcap) { m->qcap = m->qcap ? m->qcap * 2 : 64; m->queue = (int *)realloc(m->queue, sizeof(int) * (size_t)m->qcap); }
+        m->queue[m->qlen++] = num;
         return pn_new_ref(dn, 0);
     }
     return copy_direct(m, o, 0);
 }
 
+static pn_obj *copy_direct_impl(pn_copymap *m, pn_obj *o, int is_page);
+static int g_cdepth = 0;
 static pn_obj *copy_direct(pn_copymap *m, pn_obj *o, int is_page) {
+    if (g_cdepth > 256) return pn_null(); /* defence in depth against direct-object cycles */
+    g_cdepth++;
+    pn_obj *r = copy_direct_impl(m, o, is_page);
+    g_cdepth--;
+    return r;
+}
+
+static pn_obj *copy_direct_impl(pn_copymap *m, pn_obj *o, int is_page) {
     int i;
     switch (o->type) {
     case PN_ARRAY: {
         pn_obj *a = pn_new_array();
-        for (i = 0; i < o->u.arr.len; i++) pn_arr_push(a, pn_copy_into(m, o->u.arr.items[i]));
+        for (i = 0; i < o->u.arr.len; i++) pn_arr_push(a, copy_into(m, o->u.arr.items[i]));
         return a;
     }
     case PN_DICT: {
@@ -57,7 +88,7 @@ static pn_obj *copy_direct(pn_copymap *m, pn_obj *o, int is_page) {
         for (i = 0; i < o->u.dict.len; i++) {
             const char *k = o->u.dict.keys[i];
             if (is_page && (!strcmp(k, "Parent") || !strcmp(k, "B") || !strcmp(k, "Thumb"))) continue;
-            pn_obj *v = pn_copy_into(m, o->u.dict.vals[i]);
+            pn_obj *v = copy_into(m, o->u.dict.vals[i]);
             if (v->type == PN_NULL) { pn_drop(v); continue; }
             pn_dict_put(d, k, v);
         }
@@ -117,13 +148,16 @@ pn_doc *pn_assemble(pn_doc **docs, const int *pages, const int *rot, int n) {
         }
         if (!dnum) continue;
         pn_obj *dpage = pn_load(dst, dnum);
-        /* inherited attributes from source tree */
-        const char *inh[] = {"Resources", "MediaBox", "CropBox"};
-        for (int k = 0; k < 3; k++) {
+        /* inherited attributes from the source tree (resources merged like PDF.js) */
+        {
+            pn_obj *mr = pn_page_resources(src, spage);
+            pn_dict_put(dpage, "Resources", pn_copy_into(m, mr));
+            pn_drop(mr);
+        }
+        const char *inh[] = {"MediaBox", "CropBox"};
+        for (int k = 0; k < 2; k++) {
             if (pn_dict_get(dpage, inh[k])) continue;
-            pn_obj *node = pn_get(src, spage, "Parent");
-            pn_obj *raw = NULL;
-            for (int d = 0; node && d < 64 && !raw; d++) { raw = pn_dict_get(node, inh[k]); node = pn_get(src, node, "Parent"); }
+            pn_obj *raw = pn_page_inherited_raw(src, spage, inh[k]);
             if (raw) pn_dict_put(dpage, inh[k], pn_copy_into(m, raw));
         }
         if (!pn_dict_get(dpage, "MediaBox")) {

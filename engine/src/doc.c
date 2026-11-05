@@ -4,6 +4,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Object numbers are bounded by the file size (each object costs bytes), with a floor for sparse
+ * numbering; otherwise one huge number would allocate a giant table and slow every pass. */
+static int max_objnum(pn_doc *doc) {
+    size_t m = doc->len > (1u << 20) ? doc->len : (1u << 20);
+    return m > 8000000 ? 8000000 : (int)m;
+}
+
 static void xref_ensure(pn_doc *doc, int n) {
     if (n <= doc->nxref) return;
     if (n > doc->capxref) {
@@ -23,13 +30,25 @@ int pn_add_obj(pn_doc *doc, pn_obj *o) {
     doc->xref[num].obj = o;
     return num;
 }
+/* Objects that are replaced while the document is being edited may still be referenced by pointers
+ * held further up the call stack (a crafted file can make a "popup" be the page itself, a form draw
+ * itself, …). They are therefore retired and only freed together with the document. */
+void pn_retire(pn_doc *doc, pn_obj *o) {
+    if (!o || o->refs < 0) return;
+    if (doc->nretired == doc->capretired) {
+        doc->capretired = doc->capretired ? doc->capretired * 2 : 64;
+        doc->retired = (pn_obj **)realloc(doc->retired, sizeof(pn_obj *) * (size_t)doc->capretired);
+    }
+    doc->retired[doc->nretired++] = pn_keep(o);
+}
+
 void pn_set_obj(pn_doc *doc, int num, pn_obj *o) {
     if (num <= 0) { pn_drop(o); return; }
     xref_ensure(doc, num + 1);
     pn_obj *old = doc->xref[num].obj;
     doc->xref[num].obj = o;
     doc->xref[num].type = 3;
-    if (old != o) pn_drop(old);
+    if (old != o && old) { pn_retire(doc, old); pn_drop(old); }
 }
 pn_obj *pn_add_ref(pn_doc *doc, pn_obj *o) { return pn_new_ref(pn_add_obj(doc, o), 0); }
 
@@ -55,6 +74,9 @@ void pn_doc_free(pn_doc *doc) {
     pn_drop(doc->trailer);
     free(doc->pages);
     free(doc->buf);
+    free(doc->stm_loaded);
+    for (int i = 0; i < doc->nretired; i++) pn_drop(doc->retired[i]);
+    free(doc->retired);
     free(doc);
 }
 
@@ -125,9 +147,23 @@ out:
     return res;
 }
 
+static int cmp_ll(const void *a, const void *b) {
+    long long x = *(const long long *)a, y = *(const long long *)b;
+    return x < y ? -1 : x > y;
+}
+
 static void load_objstm(pn_doc *doc, int stmnum) {
+    if (stmnum <= 0 || stmnum >= doc->nxref) return;
+    if (stmnum >= doc->stm_loaded_n) {
+        int nn = doc->nxref + 1;
+        doc->stm_loaded = (unsigned char *)realloc(doc->stm_loaded, (size_t)nn);
+        memset(doc->stm_loaded + doc->stm_loaded_n, 0, (size_t)(nn - doc->stm_loaded_n));
+        doc->stm_loaded_n = nn;
+    }
+    if (doc->stm_loaded[stmnum]) return;
     pn_obj *stm = pn_load(doc, stmnum);
-    if (!pn_is(stm, PN_STREAM)) return;
+    if (!pn_is(stm, PN_STREAM)) return; /* not loadable right now: don't mark it, so a later lookup can retry */
+    doc->stm_loaded[stmnum] = 1;
     size_t len; int ok;
     unsigned char *data = pn_stream_decode(doc, stm, &len, &ok);
     if (!data) return;
@@ -144,36 +180,54 @@ static void load_objstm(pn_doc *doc, int stmnum) {
         if (pn_lex_next(&lx) != TK_INT) { n = i; break; }
         ofs[i] = lx.ival;
     }
+    /* Each member is parsed only up to the next member's start, so crafted overlapping offsets
+     * cannot make every member re-parse the same huge region (total work stays linear). */
+    long long *sorted = (long long *)malloc(sizeof(long long) * (size_t)(n + 1));
+    memcpy(sorted, ofs, sizeof(long long) * (size_t)n);
+    qsort(sorted, (size_t)n, sizeof(long long), cmp_ll);
     for (int i = 0; i < n; i++) {
         int num = nums[i];
         if (num <= 0 || num >= doc->nxref) continue;
         pn_xref *x = &doc->xref[num];
         if (x->type != 2 || x->stm != stmnum || x->obj) continue;
-        if (first + ofs[i] >= (long long)len) continue;
-        lx.p = data + first + ofs[i];
-        pn_obj *o = pn_parse_obj(&lx, 1);
+        if (first < 0 || ofs[i] < 0 || first + ofs[i] >= (long long)len) continue;
+        long long stop = (long long)len - first;
+        int lo = 0, hi = n - 1; /* smallest offset strictly greater than ours */
+        while (lo <= hi) { int mid = (lo + hi) / 2; if (sorted[mid] > ofs[i]) { stop = sorted[mid]; hi = mid - 1; } else lo = mid + 1; }
+        if (first + stop > (long long)len) stop = (long long)len - first;
+        pn_lexer ml;
+        pn_lex_init(&ml, data + first + ofs[i], (size_t)(stop - ofs[i]));
+        pn_obj *o = pn_parse_obj(&ml, 1);
+        pn_lex_free(&ml);
         x->obj = o ? o : pn_null();
     }
+    free(sorted);
     pn_lex_free(&lx);
     free(nums); free(ofs); free(data);
 }
 
+static int g_load_depth = 0;
 pn_obj *pn_load(pn_doc *doc, int num) {
     if (num <= 0 || num >= doc->nxref) return NULL;
     pn_xref *x = &doc->xref[num];
     if (x->obj) return x->obj;
-    if (x->loading) return NULL;
+    if (x->loading || g_load_depth > 32) return NULL; /* e.g. /Length chains through other streams */
     x->loading = 1;
+    g_load_depth++;
     if (x->type == 1) {
         int n = -1;
         pn_obj *o = parse_indirect_at(doc, x->ofs, &n, NULL);
         if (o && n != num) { pn_drop(o); o = NULL; }
         x->obj = o;
     } else if (x->type == 2) {
-        load_objstm(doc, x->stm);
+        int stm = x->stm;
+        load_objstm(doc, stm);
+        x = &doc->xref[num];
+        if (!x->obj && stm < doc->stm_loaded_n && doc->stm_loaded[stm]) x->obj = pn_null(); /* not in the stream: don't re-decode it on every lookup */
     }
-    x->loading = 0;
+    g_load_depth--;
     x = &doc->xref[num];
+    x->loading = 0;
     return x->obj;
 }
 
@@ -184,10 +238,18 @@ pn_obj *pn_resolve(pn_doc *doc, pn_obj *o) {
 }
 pn_obj *pn_get(pn_doc *doc, pn_obj *d, const char *key) { return pn_resolve(doc, pn_dict_get(pn_resolve(doc, d), key)); }
 pn_obj *pn_catalog(pn_doc *doc) { return pn_get(doc, doc->trailer, "Root"); }
+int pn_is_annotation(pn_doc *doc, pn_obj *o) {
+    if (!pn_is(o, PN_DICT)) return 0;
+    const char *t = pn_name(pn_get(doc, o, "Type"));
+    if (*t && strcmp(t, "Annot")) return 0; /* /Page, /Pages, /Catalog, … */
+    pn_obj *c = pn_get(doc, o, "Contents"); /* annotations have a text /Contents; pages a stream or array */
+    if (pn_dict_get(o, "Kids") || pn_dict_get(o, "MediaBox") || pn_is(c, PN_STREAM) || pn_is(c, PN_ARRAY)) return 0;
+    return *pn_name(pn_get(doc, o, "Subtype")) != 0;
+}
 
 /* ---------------- xref parsing ---------------- */
 static void set_entry(pn_doc *doc, int num, int type, long long a, int b, char *seen) {
-    if (num <= 0 || num > 10000000) return;
+    if (num <= 0 || num > max_objnum(doc)) return;
     xref_ensure(doc, num + 1);
     if (seen[0] == 0) { /* seen map not used; rely on "type==0 means unset" */ }
     pn_xref *x = &doc->xref[num];
@@ -208,7 +270,7 @@ static int read_xref_table(pn_doc *doc, pn_lexer *lx, pn_obj **trailer_out, char
         long long start = lx->ival;
         if (pn_lex_next(lx) != TK_INT) return 0;
         long long count = lx->ival;
-        if (count < 0 || count > 10000000) return 0;
+        if (count < 0 || start < 0 || start + count > (long long)max_objnum(doc) + 1) return 0;
         for (long long i = 0; i < count; i++) {
             if (pn_lex_next(lx) != TK_INT) return 0;
             long long ofs = lx->ival;
@@ -329,6 +391,9 @@ static void reset_xref(pn_doc *doc) {
     doc->nxref = 0;
     pn_drop(doc->trailer);
     doc->trailer = NULL;
+    free(doc->stm_loaded);
+    doc->stm_loaded = NULL;
+    doc->stm_loaded_n = 0;
 }
 
 /* Scan the whole file for "N G obj" and rebuild the xref. */
@@ -353,7 +418,7 @@ static int repair(pn_doc *doc) {
             if (j == ne) continue;
             if (j > 0 && !pn_is_ws(b[j - 1]) && !pn_is_delim(b[j - 1])) continue;
             int num = atoi((const char *)b + j);
-            if (num <= 0 || num > 10000000) continue;
+            if (num <= 0 || num > max_objnum(doc)) continue;
             xref_ensure(doc, num + 1);
             pn_xref *x = &doc->xref[num];
             pn_drop(x->obj); x->obj = NULL;
@@ -384,7 +449,7 @@ static int repair(pn_doc *doc) {
                 if (pn_lex_next(&lx) != TK_INT) break;
                 int on = (int)lx.ival;
                 if (pn_lex_next(&lx) != TK_INT) break;
-                if (on <= 0 || on > 10000000) continue;
+                if (on <= 0 || on > max_objnum(doc)) continue;
                 xref_ensure(doc, on + 1);
                 if (doc->xref[on].type == 0) { doc->xref[on].type = 2; doc->xref[on].stm = num; doc->xref[on].idx = k; }
             }
@@ -410,19 +475,23 @@ static int repair(pn_doc *doc) {
 }
 
 /* ---------------- pages ---------------- */
-static void collect_pages(pn_doc *doc, pn_obj *node_ref, int depth, int *cap) {
+static void collect_pages(pn_doc *doc, pn_obj *node_ref, int depth, int *cap, char *seen) {
     if (depth > 64 || !node_ref) return;
+    if (node_ref->type == PN_REF) {
+        int n = node_ref->u.ref.num;
+        if (n <= 0 || n >= doc->nxref || seen[n]) return; /* shared or cyclic node: visit once */
+        seen[n] = 1;
+    }
     pn_obj *node = pn_resolve(doc, node_ref);
     if (!pn_is(node, PN_DICT)) return;
     pn_obj *kids = pn_get(doc, node, "Kids");
     pn_obj *type = pn_get(doc, node, "Type");
     if (pn_is(kids, PN_ARRAY) && !pn_is_name(type, "Page")) {
-        for (int i = 0; i < pn_arr_len(kids); i++) collect_pages(doc, pn_arr_get(kids, i), depth + 1, cap);
+        for (int i = 0; i < pn_arr_len(kids); i++) collect_pages(doc, pn_arr_get(kids, i), depth + 1, cap, seen);
         return;
     }
     if (node_ref->type != PN_REF) return;
     int num = node_ref->u.ref.num;
-    for (int i = 0; i < doc->npages; i++) if (doc->pages[i] == num) return; /* cycle / duplicate */
     if (doc->npages == *cap) { *cap = *cap ? *cap * 2 : 64; doc->pages = (int *)realloc(doc->pages, sizeof(int) * (size_t)*cap); }
     doc->pages[doc->npages++] = num;
 }
@@ -431,7 +500,9 @@ static void load_pages(pn_doc *doc) {
     free(doc->pages); doc->pages = NULL; doc->npages = 0;
     int cap = 0;
     pn_obj *cat = pn_catalog(doc);
-    collect_pages(doc, pn_dict_get(cat, "Pages"), 0, &cap);
+    char *seen = (char *)calloc((size_t)doc->nxref + 1, 1);
+    collect_pages(doc, pn_dict_get(cat, "Pages"), 0, &cap, seen);
+    free(seen);
     if (doc->npages == 0) {
         /* broken tree: fall back to all /Type /Page objects in file order */
         for (int num = 1; num < doc->nxref; num++) {
@@ -449,35 +520,90 @@ int pn_doc_page_count(pn_doc *doc) { if (doc->pages_dirty) load_pages(doc); retu
 int pn_doc_page_num(pn_doc *doc, int idx) { if (doc->pages_dirty) load_pages(doc); return (idx >= 0 && idx < doc->npages) ? doc->pages[idx] : 0; }
 pn_obj *pn_doc_page(pn_doc *doc, int idx) { int n = pn_doc_page_num(doc, idx); return n ? pn_load(doc, n) : NULL; }
 
-pn_obj *pn_page_inherited(pn_doc *doc, pn_obj *page, const char *key) {
-    pn_obj *node = page;
-    for (int depth = 0; node && depth < 64; depth++) {
-        pn_obj *v = pn_get(doc, node, key);
+/* Walk the /Parent chain like PDF.js does: no depth limit, but cycle-safe (Floyd's tortoise/hare). */
+pn_obj *pn_page_inherited_raw(pn_doc *doc, pn_obj *page, const char *key) {
+    pn_obj *slow = page, *fast = page;
+    for (int steps = 0; fast && steps < 4096; steps++) { /* deeper chains are pathological (UI refuses to redact on mismatch) */
+        pn_obj *v = pn_dict_get(fast, key);
         if (v) return v;
-        node = pn_get(doc, node, "Parent");
+        fast = pn_get(doc, fast, "Parent");
+        if (!fast) break;
+        v = pn_dict_get(fast, key);
+        if (v) return v;
+        fast = pn_get(doc, fast, "Parent");
+        slow = pn_get(doc, slow, "Parent");
+        if (fast && fast == slow) break; /* cycle */
     }
     return NULL;
 }
 
-void pn_page_box(pn_doc *doc, pn_obj *page, const char *which, double box[4]) {
-    pn_obj *b = pn_page_inherited(doc, page, which);
-    if (!pn_is(b, PN_ARRAY) && strcmp(which, "MediaBox")) b = pn_page_inherited(doc, page, "MediaBox");
-    if (pn_arr_len(b) >= 4) {
-        for (int i = 0; i < 4; i++) box[i] = pn_num(pn_resolve(doc, pn_arr_get(b, i)), 0);
-        if (box[0] > box[2]) { double t = box[0]; box[0] = box[2]; box[2] = t; }
-        if (box[1] > box[3]) { double t = box[1]; box[1] = box[3]; box[3] = t; }
-        if (box[2] - box[0] < 1 || box[3] - box[1] < 1) goto deflt;
-        return;
+pn_obj *pn_page_inherited(pn_doc *doc, pn_obj *page, const char *key) {
+    return pn_resolve(doc, pn_page_inherited_raw(doc, page, key));
+}
+
+/* Resources as PDF.js sees them: the page's and all ancestors' /Resources merged, nearest level
+ * winning per top-level key. Returns an owned reference. */
+pn_obj *pn_page_resources(pn_doc *doc, pn_obj *page) {
+    pn_obj *merged = NULL, *single = NULL;
+    int levels = 0;
+    pn_obj *slow = page, *node = page;
+    for (int step = 0; node && step < 8192; step++) {
+        pn_obj *r = pn_get(doc, node, "Resources");
+        if (pn_is(r, PN_DICT)) {
+            if (levels == 0) single = r;
+            else {
+                if (!merged) merged = pn_shallow_copy(single);
+                for (int i = 0; i < pn_dict_len(r); i++)
+                    if (!pn_dict_get(merged, pn_dict_key(r, i))) pn_dict_put(merged, pn_dict_key(r, i), pn_keep(pn_dict_val(r, i)));
+            }
+            levels++;
+        }
+        node = pn_get(doc, node, "Parent");
+        if (step & 1) slow = pn_get(doc, slow, "Parent");
+        if (node && node == slow) break; /* cycle */
     }
-deflt:
-    box[0] = 0; box[1] = 0; box[2] = 612; box[3] = 792;
+    if (merged) return merged;
+    return single ? pn_keep(single) : pn_new_dict();
+}
+
+/* Page geometry deliberately mirrors PDF.js (core/page.js) exactly, so that a box the user draws over
+ * the rendered page maps to the same PDF coordinates in the engine. Any disagreement here would let a
+ * redaction box land in the wrong place. */
+static int box_of(pn_doc *doc, pn_obj *page, const char *which, double box[4]) {
+    pn_obj *b = pn_page_inherited(doc, page, which);
+    if (pn_arr_len(b) != 4) return 0;
+    for (int i = 0; i < 4; i++) {
+        pn_obj *v = pn_resolve(doc, pn_arr_get(b, i));
+        if (!pn_is_number(v)) return 0;
+        box[i] = pn_num(v, 0);
+    }
+    if (box[0] > box[2]) { double t = box[0]; box[0] = box[2]; box[2] = t; }
+    if (box[1] > box[3]) { double t = box[1]; box[1] = box[3]; box[3] = t; }
+    return box[2] - box[0] > 0 && box[3] - box[1] > 0;
+}
+
+void pn_page_box(pn_doc *doc, pn_obj *page, const char *which, double box[4]) {
+    double mb[4];
+    if (!box_of(doc, page, "MediaBox", mb)) { mb[0] = 0; mb[1] = 0; mb[2] = 612; mb[3] = 792; }
+    memcpy(box, mb, sizeof mb);
+    if (!strcmp(which, "MediaBox")) return;
+    double cb[4];
+    if (!box_of(doc, page, which, cb)) return;
+    /* visible area = CropBox intersected with MediaBox (empty intersection -> MediaBox) */
+    double x0 = cb[0] > mb[0] ? cb[0] : mb[0], y0 = cb[1] > mb[1] ? cb[1] : mb[1];
+    double x1 = cb[2] < mb[2] ? cb[2] : mb[2], y1 = cb[3] < mb[3] ? cb[3] : mb[3];
+    if (x1 > x0 && y1 > y0) { box[0] = x0; box[1] = y0; box[2] = x1; box[3] = y1; }
 }
 
 int pn_page_rotation(pn_doc *doc, pn_obj *page) {
-    int r = (int)pn_int(pn_page_inherited(doc, page, "Rotate"), 0);
+    pn_obj *o = pn_page_inherited(doc, page, "Rotate");
+    double v = pn_num(o, 0);
+    if (!pn_is_number(o) || v != (double)(long long)v) return 0;
+    long long r = (long long)v;
+    if (r % 90 != 0) return 0; /* PDF.js ignores invalid rotations entirely */
     r %= 360;
     if (r < 0) r += 360;
-    return (r / 90) * 90;
+    return (int)r;
 }
 
 void pn_rebuild_page_tree(pn_doc *doc, const int *nums, int n) {
@@ -487,16 +613,15 @@ void pn_rebuild_page_tree(pn_doc *doc, const int *nums, int n) {
     for (int i = 0; i < n; i++) {
         pn_obj *pg = pn_load(doc, nums[i]);
         if (!pn_is(pg, PN_DICT)) continue;
+        { /* resources merged across the old tree, as renderers see them */
+            pn_obj *mr = pn_page_resources(doc, pg);
+            pn_dict_put(pg, "Resources", pn_deep_copy_direct(mr));
+            pn_drop(mr);
+        }
         for (int k = 0; k < 4; k++) {
             if (pn_dict_get(pg, inh[k])) continue;
-            pn_obj *v = pn_page_inherited(doc, pg, inh[k]);
-            if (v) {
-                /* keep the original (possibly indirect) value if found on a parent */
-                pn_obj *node = pn_get(doc, pg, "Parent");
-                pn_obj *raw = NULL;
-                for (int d = 0; node && d < 64 && !raw; d++) { raw = pn_dict_get(node, inh[k]); node = pn_get(doc, node, "Parent"); }
-                pn_dict_put(pg, inh[k], raw ? pn_deep_copy_direct(raw) : pn_deep_copy_direct(v));
-            }
+            pn_obj *raw = pn_page_inherited_raw(doc, pg, inh[k]);
+            if (raw) pn_dict_put(pg, inh[k], pn_deep_copy_direct(raw));
         }
     }
     pn_obj *pages = pn_new_dict();
@@ -635,7 +760,8 @@ unsigned char *pn_page_content(pn_doc *doc, pn_obj *page, size_t *outlen) {
         if (!pn_is(s, PN_STREAM)) continue;
         size_t l; int ok;
         unsigned char *d = pn_stream_decode(doc, s, &l, &ok);
-        if (d) { pn_buf_put(&b, d, l); free(d); }
+        if (d && b.len + l <= PN_MAX_STREAM) pn_buf_put(&b, d, l); /* page total is capped too */
+        free(d);
         pn_buf_putc(&b, '\n');
     }
     return pn_buf_steal(&b, outlen);
@@ -648,15 +774,19 @@ void pn_page_set_content(pn_doc *doc, pn_obj *page, const unsigned char *data, s
 }
 
 pn_obj *pn_page_private_resources(pn_doc *doc, pn_obj *page) {
-    pn_obj *res = pn_page_inherited(doc, page, "Resources");
-    pn_obj *copy = pn_is(res, PN_DICT) ? pn_shallow_copy(res) : pn_new_dict();
+    pn_obj *res = pn_page_resources(doc, page);
+    /* deep copy of the direct structure (refs stay refs): a shared child can never be mutated,
+     * so no reference cycle can be formed between direct objects */
+    pn_obj *copy = pn_is(res, PN_DICT) ? pn_deep_copy_direct(res) : pn_new_dict();
+    pn_drop(res);
     pn_dict_put(page, "Resources", copy);
     return copy;
 }
 
 pn_obj *pn_res_subdict(pn_doc *doc, pn_obj *res, const char *cat) {
     pn_obj *sub = pn_get(doc, res, cat);
-    pn_obj *copy = pn_is(sub, PN_DICT) ? pn_shallow_copy(sub) : pn_new_dict();
+    if (pn_is(sub, PN_DICT) && pn_dict_get(sub, "Type") && !pn_is_name(pn_dict_get(sub, "Type"), cat)) sub = NULL; /* e.g. a /Font that points at a Page */
+    pn_obj *copy = pn_is(sub, PN_DICT) ? pn_deep_copy_direct(sub) : pn_new_dict();
     pn_dict_put(res, cat, copy);
     return copy;
 }

@@ -59,7 +59,7 @@ export function Privacy() {
       detail: 'fetch(), XHR, WebSocket, sendBeacon and importScripts to other sites throw in the page and in every worker.',
     });
     // 4. Service worker
-    const reg = 'serviceWorker' in navigator ? await navigator.serviceWorker.getRegistration() : undefined;
+    const reg = navigator.serviceWorker ? await navigator.serviceWorker.getRegistration() : undefined;
     const sw = reg?.active;
     let swDetail = 'No service worker yet (it installs on the first visit to the deployed site).';
     if (sw) {

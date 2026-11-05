@@ -2,37 +2,18 @@
 import { useEffect, useState } from 'preact/hooks';
 import { useApp, setState, withBusy, toast, getState } from '../store/app';
 import { db, type RecipeRow } from '../store/db';
-import { describeStep, runStep, type Step } from '../pipeline/steps';
+import { describeStep, runStep, validateSteps, type Step } from '../pipeline/steps';
 import { Icon, Dialog, Field } from './ui';
 import { downloadBlob, safeName } from '../lib/util';
 import { downloadParts } from './Organize';
 import { downloadCurrent } from './actions';
 
-const KNOWN: Step['op'][] = [
-  'merge',
-  'rotate',
-  'delete',
-  'keep',
-  'reverse',
-  'split',
-  'compress',
-  'stripMetadata',
-  'stamp',
-  'redactText',
-  'sign',
-  'flattenForms',
-  'ocr',
-];
-
 export function validateRecipe(obj: unknown): { name: string; steps: Step[] } {
   const o = obj as { pagenoodle?: string; name?: unknown; steps?: unknown };
   if (!o || typeof o !== 'object' || o.pagenoodle !== 'recipe') throw new Error("That file isn't a Pagenoodle recipe.");
-  if (!Array.isArray(o.steps) || !o.steps.length) throw new Error('This recipe has no steps.');
-  for (const s of o.steps)
-    if (!s || typeof s !== 'object' || !KNOWN.includes((s as Step).op)) throw new Error(`Unknown step: ${JSON.stringify(s).slice(0, 60)}`);
   return {
     name: typeof o.name === 'string' && o.name.trim() ? o.name.trim().slice(0, 80) : 'Imported recipe',
-    steps: o.steps as Step[],
+    steps: validateSteps(o.steps),
   };
 }
 
@@ -40,29 +21,38 @@ export function recipeJson(name: string, steps: Step[]) {
   return JSON.stringify({ pagenoodle: 'recipe', version: 1, name, steps }, null, 2);
 }
 
-export async function runRecipe(name: string, steps: Step[]) {
+export async function runRecipe(name: string, rawSteps: Step[]) {
   if (!getState().doc.pages.length) return toast('Open the files to cook first, then run the recipe.');
+  let steps: Step[];
+  try {
+    steps = validateSteps(rawSteps);
+  } catch (e) {
+    return toast(e instanceof Error ? e.message : String(e), 'error');
+  }
+  // Split produces separate files, so it always runs last — every other step applies to all parts.
+  steps = [...steps.filter((s) => s.op !== 'split'), ...steps.filter((s) => s.op === 'split')];
+  const signs = steps.filter((s): s is Extract<Step, { op: 'sign' }> => s.op === 'sign');
+  if (signs.length && !confirm(`“${name}” will place your saved signature on page(s): ${signs.map((s) => s.pages).join(', ')}. Continue?`)) return;
   let parts: Awaited<ReturnType<typeof runStep>>['parts'];
   const ok = await withBusy(`Cooking “${name}”…`, async (ctx) => {
     for (let i = 0; i < steps.length; i++) {
-      setState((s) => ({
-        busy: s.busy
-          ? {
-              ...s.busy,
-              label: `Step ${i + 1}/${steps.length}: ${describeStep(steps[i])}`,
-            }
-          : null,
-      }));
-      const out = await runStep(steps[i], {
-        signal: ctx.signal,
-        onProgress: ctx.onProgress,
-      });
+      setState((s) => ({ busy: s.busy ? { ...s.busy, label: `Step ${i + 1}/${steps.length}: ${describeStep(steps[i])}` } : null }));
+      const out = await runStep(steps[i], { signal: ctx.signal, onProgress: ctx.onProgress });
       if (out.parts) parts = out.parts;
     }
     if (parts) await downloadParts(parts, ctx);
     return true;
   });
   if (ok && !parts) await downloadCurrent();
+}
+
+/** Parse stored steps without ever throwing (a damaged recipe must not break the page). */
+export function parseStored(json: string): { steps: Step[]; error?: string } {
+  try {
+    return { steps: validateSteps(JSON.parse(json)) };
+  } catch (e) {
+    return { steps: [], error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 const TEMPLATES: { label: string; step: Step }[] = [
@@ -198,27 +188,32 @@ export function Recipes() {
             </div>
           )}
           <p class="hint">
-            Stored in {mode === 'opfs' ? 'SQLite on your device (OPFS)' : mode === 'indexeddb' ? 'SQLite, saved to IndexedDB on your device' : mode || '…'} —
-            never uploaded.
+            Stored in{' '}
+            {mode === 'opfs'
+              ? 'SQLite on your device (OPFS)'
+              : mode === 'indexeddb'
+                ? 'SQLite, saved to IndexedDB on your device (if Pagenoodle is open in another tab, close it so all tabs share one store)'
+                : mode || '…'}{' '}
+            — never uploaded.
           </p>
         </section>
         {rows.map((r) => {
-          let steps: Step[] = [];
-          try {
-            steps = JSON.parse(r.steps);
-          } catch {
-            /* ignore */
-          }
+          const { steps, error } = parseStored(r.steps);
           return (
             <section class="card" key={r.id} aria-label={`Recipe ${r.name}`} data-testid="recipe-card">
               <h2>📒 {r.name}</h2>
+              {error && (
+                <p role="alert" class="hint">
+                  ⚠️ This recipe is damaged and can't run: {error}
+                </p>
+              )}
               <ol style={{ margin: '4px 0', paddingLeft: 20 }}>
                 {steps.map((s, i) => (
                   <li key={i}>{describeStep(s)}</li>
                 ))}
               </ol>
               <div class="actions">
-                <button class="btn primary" onClick={() => runRecipe(r.name, steps)} disabled={!st.doc.pages.length} data-testid="run-recipe">
+                <button class="btn primary" onClick={() => runRecipe(r.name, steps)} disabled={!st.doc.pages.length || !!error} data-testid="run-recipe">
                   <Icon name="play" /> Run on open files
                 </button>
                 <button
@@ -263,7 +258,7 @@ export function Recipes() {
       {editing && (
         <RecipeEditor
           initialName={editing.name}
-          initialSteps={JSON.parse(editing.steps)}
+          initialSteps={parseStored(editing.steps).steps}
           onClose={() => setEditing(null)}
           onSave={async (nm, steps) => {
             const id = editing.id;

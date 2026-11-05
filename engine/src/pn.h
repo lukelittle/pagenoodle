@@ -91,6 +91,11 @@ pn_obj *pn_deep_copy_direct(pn_obj *o); /* copies direct structure; refs stay re
 /* ------------------------------------------------------------------ */
 /* Lexer / parser                                                      */
 /* ------------------------------------------------------------------ */
+#define PN_MAX_NESTING 64
+#define PN_MAX_STREAM ((size_t)256 << 20) /* decompressed bytes per stream */
+#define PN_MAX_IMAGE_DIM 65536
+#define PN_MAX_CIDW 65536
+
 typedef enum {
     TK_EOF, TK_ERR, TK_INT, TK_REAL, TK_STRING, TK_NAME, TK_KEYWORD,
     TK_ARR_OPEN, TK_ARR_CLOSE, TK_DICT_OPEN, TK_DICT_CLOSE, TK_BRACE_OPEN, TK_BRACE_CLOSE
@@ -103,6 +108,7 @@ typedef struct {
     double rval;
     pn_buf sbuf; /* string / name / keyword text */
     int hex;
+    int depth;   /* nesting depth guard against stack exhaustion */
 } pn_lexer;
 
 void pn_lex_init(pn_lexer *lx, const unsigned char *data, size_t len);
@@ -134,6 +140,9 @@ typedef struct pn_doc {
     int pages_dirty;
     int encrypted;
     int repaired;
+    unsigned char *stm_loaded; /* object streams already decoded (each is decoded at most once) */
+    pn_obj **retired; int nretired, capretired; /* replaced objects, freed only with the document */
+    int stm_loaded_n;
 } pn_doc;
 
 pn_doc *pn_doc_new(void);                 /* empty document with catalog + page tree */
@@ -144,14 +153,18 @@ pn_obj *pn_resolve(pn_doc *doc, pn_obj *o);        /* follow refs (borrowed) */
 pn_obj *pn_load(pn_doc *doc, int num);              /* borrowed */
 pn_obj *pn_get(pn_doc *doc, pn_obj *d, const char *key); /* dict get + resolve (borrowed) */
 int pn_add_obj(pn_doc *doc, pn_obj *o);             /* takes ownership, returns obj num */
-void pn_set_obj(pn_doc *doc, int num, pn_obj *o);   /* takes ownership */
+void pn_set_obj(pn_doc *doc, int num, pn_obj *o);   /* takes ownership; old object is retired, not freed */
+void pn_retire(pn_doc *doc, pn_obj *o);             /* keep o alive until the document is freed (takes a reference) */
 pn_obj *pn_add_ref(pn_doc *doc, pn_obj *o);         /* add and return new ref (owned) */
 pn_obj *pn_catalog(pn_doc *doc);
+int pn_is_annotation(pn_doc *doc, pn_obj *o); /* a real annotation dict (not a page, catalog, …) */
 
 int pn_doc_page_count(pn_doc *doc);
 pn_obj *pn_doc_page(pn_doc *doc, int idx);          /* page dict (borrowed) */
 int pn_doc_page_num(pn_doc *doc, int idx);
 pn_obj *pn_page_inherited(pn_doc *doc, pn_obj *page, const char *key); /* borrowed, resolved */
+pn_obj *pn_page_inherited_raw(pn_doc *doc, pn_obj *page, const char *key); /* borrowed, unresolved */
+pn_obj *pn_page_resources(pn_doc *doc, pn_obj *page); /* merged like PDF.js; owned */
 void pn_page_box(pn_doc *doc, pn_obj *page, const char *which, double box[4]);
 int pn_page_rotation(pn_doc *doc, pn_obj *page);
 void pn_rebuild_page_tree(pn_doc *doc, const int *page_nums, int n); /* flat /Pages */

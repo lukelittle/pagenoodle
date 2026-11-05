@@ -44,7 +44,7 @@ export function installNetGuard(): void {
       return (open as any).call(this, method, url, ...rest);
     } as typeof XMLHttpRequest.prototype.open;
   }
-  const block = (name: 'EventSource' | 'RTCPeerConnection') => {
+  const block = (name: 'EventSource' | 'RTCPeerConnection' | 'WebTransport' | 'fetchLater') => {
     if (name in g) {
       Object.defineProperty(g, name, {
         configurable: false,
@@ -69,6 +69,8 @@ export function installNetGuard(): void {
   }
   block('EventSource');
   block('RTCPeerConnection');
+  block('WebTransport');
+  block('fetchLater');
   if (typeof navigator !== 'undefined' && 'sendBeacon' in navigator) {
     try {
       Object.defineProperty(navigator, 'sendBeacon', {
