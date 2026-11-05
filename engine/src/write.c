@@ -137,6 +137,12 @@ static unsigned long long fnv(const unsigned char *d, size_t n, unsigned long lo
     return h;
 }
 
+static int renum(wctx *w, pn_obj *ref) {
+    if (!ref || ref->type != PN_REF) return 0;
+    int n = ref->u.ref.num;
+    return (n > 0 && n < w->doc->nxref) ? w->newnum[n] : 0;
+}
+
 unsigned char *pn_doc_save(pn_doc *doc, int flags, size_t *outlen) {
     if (flags & PN_SAVE_STRIPMETA) strip_metadata(doc);
     /* refresh page count in page tree if needed */
@@ -319,8 +325,8 @@ unsigned char *pn_doc_save(pn_doc *doc, int flags, size_t *outlen) {
         size_t cl;
         unsigned char *c = pn_deflate(x.data, x.len, &cl, 9);
         pn_buf_printf(&out, "%d 0 obj\n<</Type/XRef/Size %d/W[1 4 2]/Filter/FlateDecode/Length %zu", xn, extra, cl);
-        pn_buf_printf(&out, "/Root %d 0 R", w.newnum[root && root->type == PN_REF ? root->u.ref.num : 0]);
-        if (info && info->type == PN_REF && w.newnum[info->u.ref.num]) pn_buf_printf(&out, "/Info %d 0 R", w.newnum[info->u.ref.num]);
+        pn_buf_printf(&out, "/Root %d 0 R", renum(&w, root));
+        if (renum(&w, info)) pn_buf_printf(&out, "/Info %d 0 R", renum(&w, info));
         pn_buf_puts(&out, "/ID");
         pn_write_obj(&out, idarr);
         pn_buf_puts(&out, ">>\nstream\n");
@@ -334,8 +340,8 @@ unsigned char *pn_doc_save(pn_doc *doc, int flags, size_t *outlen) {
         pn_buf_printf(&out, "xref\n0 %d\n0000000000 65535 f\r\n", total);
         for (int i = 1; i < total; i++) pn_buf_printf(&out, "%010lld 00000 n\r\n", offs[i]);
         pn_buf_printf(&out, "trailer\n<</Size %d", total);
-        pn_buf_printf(&out, "/Root %d 0 R", w.newnum[root && root->type == PN_REF ? root->u.ref.num : 0]);
-        if (info && info->type == PN_REF && w.newnum[info->u.ref.num]) pn_buf_printf(&out, "/Info %d 0 R", w.newnum[info->u.ref.num]);
+        pn_buf_printf(&out, "/Root %d 0 R", renum(&w, root));
+        if (renum(&w, info)) pn_buf_printf(&out, "/Info %d 0 R", renum(&w, info));
         pn_buf_puts(&out, "/ID");
         pn_write_obj(&out, idarr);
         pn_buf_printf(&out, ">>\nstartxref\n%lld\n%%%%EOF\n", xref_ofs);

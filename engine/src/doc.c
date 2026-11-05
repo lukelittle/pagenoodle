@@ -358,7 +358,7 @@ static int repair(pn_doc *doc) {
             pn_xref *x = &doc->xref[num];
             pn_drop(x->obj); x->obj = NULL;
             x->type = 1; x->ofs = (long long)j; x->gen = atoi((const char *)b + gs);
-        } else if (b[i] == 't' && !memcmp(b + i, "trailer", 7)) {
+        } else if (b[i] == 't' && i + 7 <= n && !memcmp(b + i, "trailer", 7)) {
             pn_lexer lx; pn_lex_init(&lx, b, n); lx.p = b + i + 7;
             pn_obj *t = pn_parse_obj(&lx, 1);
             pn_lex_free(&lx);
@@ -565,6 +565,10 @@ pn_doc *pn_doc_open(const unsigned char *data, size_t len, char *err, int errlen
         load_pages(doc);
     }
     if (pn_dict_get(doc->trailer, "Encrypt")) doc->encrypted = 1;
+    {   /* the writer needs Root to be an indirect object */
+        pn_obj *r = pn_dict_get(doc->trailer, "Root");
+        if (r && r->type == PN_DICT) pn_dict_put(doc->trailer, "Root", pn_add_ref(doc, pn_keep(r)));
+    }
     if (doc->npages == 0) {
         snprintf(err, (size_t)errlen, "I couldn't find any pages in this PDF.");
         pn_doc_free(doc);
