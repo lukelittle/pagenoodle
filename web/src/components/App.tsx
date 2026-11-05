@@ -48,7 +48,7 @@ function EmptyState() {
         </p>
         <div class="row">
           <button class="btn primary" onClick={openFilePicker} data-testid="open-files">
-            <Icon name="open" /> Choose files
+            <Icon name="open" /> <span class="t">Choose files</span>
           </button>
           <button class="btn" onClick={() => setState({ mode: 'privacy' })}>
             <Icon name="wifi" /> How is this private?
@@ -207,10 +207,10 @@ export function App() {
           <Icon name="redo" />
         </button>
         <button class="btn" onClick={openFilePicker} title="Open (Ctrl+O)">
-          <Icon name="open" /> Open
+          <Icon name="open" /> <span class="t">Open</span>
         </button>
         <button class="btn primary" onClick={downloadCurrent} disabled={!hasDoc} title="Download (Ctrl+S)" data-testid="download">
-          <Icon name="download" /> Download
+          <Icon name="download" /> <span class="t">Download</span>
         </button>
         {hasDoc && (
           <button

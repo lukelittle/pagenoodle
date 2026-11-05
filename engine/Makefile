@@ -4,6 +4,7 @@
 #   make wasm       WebAssembly build via Emscripten -> ../web/public/engine/
 SRC := $(wildcard src/*.c) vendor/miniz/miniz.c
 OPT ?= -O2 -g
+NODE ?= node
 CFLAGS := $(OPT) -std=c99 -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
           -Iinclude -Isrc -Ivendor/miniz -D_POSIX_C_SOURCE=200809L \
           -DMINIZ_NO_STDIO -DMINIZ_NO_ARCHIVE_APIS -DMINIZ_NO_TIME -DMINIZ_NO_ZLIB_COMPATIBLE_NAMES
@@ -44,6 +45,16 @@ wasm:
 	  -o $(WASM_OUT)/noodle.mjs
 
 clean:
-	rm -rf build build-asan
+	rm -rf build build-asan build-wasm
 
 .PHONY: all test asan wasm clean
+
+# Run the same C test-suite against the WebAssembly build under Node.js
+wasm-test:
+	@mkdir -p build-wasm
+	emcc $(SRC) tests/test_engine.c -O2 -Iinclude -Isrc -Ivendor/miniz \
+	  -DMINIZ_NO_STDIO -DMINIZ_NO_ARCHIVE_APIS -DMINIZ_NO_TIME -DMINIZ_NO_ZLIB_COMPATIBLE_NAMES -D_GNU_SOURCE \
+	  -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=1048576 -sNODERAWFS=1 -sENVIRONMENT=node -o build-wasm/test_engine.js
+	$(NODE) build-wasm/test_engine.js tests/fixtures
+
+.PHONY: wasm-test

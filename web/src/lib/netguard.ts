@@ -44,7 +44,7 @@ export function installNetGuard(): void {
       return (open as any).call(this, method, url, ...rest);
     } as typeof XMLHttpRequest.prototype.open;
   }
-  const block = (name: 'WebSocket' | 'EventSource' | 'RTCPeerConnection') => {
+  const block = (name: 'EventSource' | 'RTCPeerConnection') => {
     if (name in g) {
       Object.defineProperty(g, name, {
         configurable: false,
@@ -55,7 +55,18 @@ export function installNetGuard(): void {
       });
     }
   };
-  block('WebSocket');
+  // WebSockets are only allowed back to this very host (used by the dev server's hot reload).
+  const OrigWS = g.WebSocket;
+  if (OrigWS) {
+    const host = new URL(base).host;
+    const Guarded = function (this: unknown, url: string | URL, protocols?: string | string[]) {
+      const u = new URL(String(url), base);
+      if (u.host !== host) throw deny('WebSocket', url);
+      return new OrigWS(u, protocols);
+    } as unknown as typeof WebSocket;
+    Guarded.prototype = OrigWS.prototype;
+    Object.defineProperty(g, 'WebSocket', { configurable: false, writable: false, value: Guarded });
+  }
   block('EventSource');
   block('RTCPeerConnection');
   if (typeof navigator !== 'undefined' && 'sendBeacon' in navigator) {

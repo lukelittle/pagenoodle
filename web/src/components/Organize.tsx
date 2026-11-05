@@ -259,32 +259,32 @@ export function Organize() {
     <div class="view">
       <div class="toolbar" role="toolbar" aria-label="Page tools">
         <button class="btn" onClick={openFilePicker}>
-          <Icon name="plus" /> Add files
+          <Icon name="plus" /> <span class="t">Add files</span>
         </button>
         <span class="sep" />
         <button class="btn" onClick={() => sel(selected.size === pages.length ? [] : pages.map((p) => p.id))}>
           {selected.size === pages.length ? 'Select none' : 'Select all'}
         </button>
         <button class="btn" onClick={() => rotate(-90)} title="Rotate left (Shift+R)">
-          <Icon name="rotl" /> <span>Rotate left</span>
+          <Icon name="rotl" /> <span class="t">Rotate left</span>
         </button>
         <button class="btn" onClick={() => rotate(90)} title="Rotate right (R)">
-          <Icon name="rotr" /> <span>Rotate right</span>
+          <Icon name="rotr" /> <span class="t">Rotate right</span>
         </button>
         <button class="btn" onClick={duplicate} disabled={!selected.size}>
-          <Icon name="copy" /> Duplicate
+          <Icon name="copy" /> <span class="t">Duplicate</span>
         </button>
         <button class="btn danger" onClick={remove} disabled={!selected.size}>
-          <Icon name="trash" /> Delete
+          <Icon name="trash" /> <span class="t">Delete</span>
         </button>
         <button class="btn" onClick={extract} disabled={!selected.size}>
-          <Icon name="extract" /> Extract
+          <Icon name="extract" /> <span class="t">Extract</span>
         </button>
         <button class="btn" onClick={() => setSplitOpen(true)}>
-          <Icon name="scissors" /> Split…
+          <Icon name="scissors" /> <span class="t">Split…</span>
         </button>
         <button class="btn" onClick={() => doStep({ op: 'reverse' }, 'Reversing…')}>
-          <Icon name="reverse" /> Reverse
+          <Icon name="reverse" /> <span class="t">Reverse</span>
         </button>
         <span class="grow" />
         <label class="hint" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>

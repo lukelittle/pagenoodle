@@ -227,6 +227,17 @@ code { background: var(--bg-2); padding: 1px 5px; border-radius: 5px; font-size:
   .brand small { display: none; }
   .grid { --thumb: 120px; gap: 10px; }
 }
+@media (max-width: 600px) {
+  .header { padding: 8px 10px; gap: 6px; }
+  .header .t, .toolbar .t { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .header .btn, .toolbar .btn { padding: 8px 10px; }
+  .brand { font-size: 17px; }
+  .badge { font-size: 12px; padding: 4px 8px; }
+  .tab { padding: 6px 10px; }
+  .view { padding: 10px; }
+  .editor { padding: 8px; }
+  .stage { padding: 10px; }
+}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
   .confetti { display: none; }

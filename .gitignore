@@ -9,3 +9,4 @@ web/playwright-report/
 *.log
 .DS_Store
 *.local.mjs
+engine/build-wasm/
