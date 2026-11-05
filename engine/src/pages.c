@@ -169,6 +169,17 @@ pn_doc *pn_assemble(pn_doc **docs, const int *pages, const int *rot, int n) {
         }
     }
     if (dform) pn_dict_put(dcat, "AcroForm", pn_add_ref(dst, dform));
+    /* keep the first source's document metadata (stripping is an explicit, separate choice) */
+    if (nsrc > 0) {
+        pn_obj *info = pn_dict_get(srcs[0]->trailer, "Info");
+        if (info) {
+            pn_obj *c = pn_copy_into(maps[0], info);
+            if (c->type == PN_REF) pn_dict_put(dst->trailer, "Info", c); else pn_drop(c);
+        }
+        pn_obj *scat = pn_catalog(srcs[0]);
+        const char *keep[] = {"Metadata", "Lang", "ViewerPreferences"};
+        for (int k = 0; k < 3; k++) { pn_obj *v = pn_dict_get(scat, keep[k]); if (v) pn_dict_put(dcat, keep[k], pn_copy_into(maps[0], v)); }
+    }
     for (int j = 0; j < nsrc; j++) pn_copymap_free(maps[j]);
     free(maps); free(srcs); free(nums);
     pn_progress(n, n);

@@ -172,9 +172,26 @@ static pn_rect *to_rects(const double *r, int n) {
     return rects;
 }
 
+extern int pn_redact_drop_undecodable;
+extern pn_obj *pn_redact_need_raster[];
+extern int pn_redact_need_raster_n;
+
+NOODLE_API void nd_redact_mode(int drop_undecodable) { pn_redact_drop_undecodable = drop_undecodable; }
+
+NOODLE_API int nd_stream_raw(int h, int num) {
+    pn_doc *d = D(h);
+    if (!d) return -1;
+    pn_obj *o = pn_load(d, num);
+    if (!pn_is(o, PN_STREAM)) return -1;
+    out_reset();
+    pn_buf_put(&g_out, o->u.stm.data, o->u.stm.len);
+    return (int)g_out.len;
+}
+
 NOODLE_API int nd_redact(int h, int page, const double *r, int n, int fill_rgb) {
     pn_doc *d = D(h);
     if (!d) return -1;
+    pn_redact_need_raster_n = 0;
     pn_rect *rects = to_rects(r, n);
     pn_redact_stats st;
     memset(&st, 0, sizeof st);
@@ -185,7 +202,12 @@ NOODLE_API int nd_redact(int h, int page, const double *r, int n, int fill_rgb) 
     pn_buf_printf(&g_out, "{\"ok\":%s,\"glyphs\":%d,\"imagesRemoved\":%d,\"imagesScrubbed\":%d,\"forms\":%d,\"annots\":%d,\"removedText\":",
                   rc == 0 ? "true" : "false", st.glyphs, st.images_removed, st.images_scrubbed, st.forms, st.annots);
     pn_json_str(&g_out, removed.data ? (const char *)removed.data : "", (int)removed.len);
-    pn_buf_putc(&g_out, '}');
+    pn_buf_puts(&g_out, ",\"needRaster\":[");
+    int first = 1;
+    for (int k = 0; k < pn_redact_need_raster_n; k++)
+        for (int i = 1; i < d->nxref; i++)
+            if (d->xref[i].obj == pn_redact_need_raster[k]) { pn_buf_printf(&g_out, first ? "%d" : ",%d", i); first = 0; break; }
+    pn_buf_puts(&g_out, "]}");
     pn_buf_free(&removed);
     return rc;
 }

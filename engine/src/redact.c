@@ -38,6 +38,12 @@ static void set_sample(unsigned char *row, int x, int comp, int ncomp, int bpc, 
     row[bit / 8] = (unsigned char)((row[bit / 8] & ~mask) | ((v << shift) & mask));
 }
 
+/* Images that cannot be decoded in C (e.g. JPEG). In mode 0 they are reported so the UI can
+ * convert them to raw pixels and retry; in mode 1 they are dropped entirely (always safe). */
+int pn_redact_drop_undecodable = 1;
+pn_obj *pn_redact_need_raster[256];
+int pn_redact_need_raster_n = 0;
+
 /* returns 0 untouched, 1 replaced (newnum), 2 drop entirely */
 int pn_redact_image(pn_doc *doc, pn_obj *img, pn_mat ctm, const pn_rect *rects, int n, int *newnum) {
     if (!pn_is(img, PN_STREAM)) return 2;
@@ -54,6 +60,17 @@ int pn_redact_image(pn_doc *doc, pn_obj *img, pn_mat ctm, const pn_rect *rects, 
     size_t len; int ok;
     unsigned char *data = pn_stream_decode(doc, img, &len, &ok);
     size_t rowbytes = ((size_t)w * (size_t)comps * (size_t)bpc + 7) / 8;
+    if (data && !ok && !pn_redact_drop_undecodable) {
+        pn_obj *f = pn_resolve(doc, pn_dict_get(img, "Filter"));
+        if (pn_is(f, PN_ARRAY)) f = pn_resolve(doc, pn_arr_get(f, pn_arr_len(f) - 1));
+        if (pn_is_name(f, "DCTDecode") || pn_is_name(f, "DCT")) {
+            int dup = 0;
+            for (int i = 0; i < pn_redact_need_raster_n; i++) if (pn_redact_need_raster[i] == img) dup = 1;
+            if (!dup && pn_redact_need_raster_n < 256) pn_redact_need_raster[pn_redact_need_raster_n++] = img;
+            free(data);
+            return 0;
+        }
+    }
     if (!data || !ok || len < rowbytes * (size_t)h) { free(data); return 2; }
     pn_mat inv = pn_mat_invert(ctm);
     unsigned blank = 0;
