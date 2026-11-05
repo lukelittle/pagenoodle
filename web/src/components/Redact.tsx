@@ -1,6 +1,7 @@
 // True redaction: removes the underlying text, image pixels and annotations — then proves it.
 import { useRef, useState } from 'preact/hooks';
-import { useApp, setState, applyEdits, withBusy, toast, newId, record, getState } from '../store/app';
+import { useApp, setState, applyEdits, withBusy, toast, newId, record, getState, undo } from '../store/app';
+import { independentCheck, geometryMatches, type IndependentResult } from '../lib/verify';
 import { engine } from '../engine/client';
 import { SAVE, type EditOp, type RedactReport } from '../engine/types';
 import { userToVisual, visualToUser, type Annot } from '../lib/overlay';
@@ -18,6 +19,8 @@ interface Verification {
   stillFound: string[];
   terms: string[];
   stripped: boolean;
+  independent: IndependentResult;
+  reverted: boolean;
 }
 
 export function Redact() {
@@ -116,24 +119,34 @@ export function Redact() {
         page: +p,
         rects: b.map((x) => visualToUser(src.info.pageInfo[+p], x.x, x.y, x.w, x.h)),
       }));
-    const ops: EditOp[] = items.map((it) => ({
-      type: 'redact',
-      page: it.page,
-      rects: it.rects,
-      fill: 0x000000,
-    }));
+    const usedTerms = terms.filter((t) => t.trim());
+    const ops: EditOp[] = [
+      ...items.map((it): EditOp => ({ type: 'redact', page: it.page, rects: it.rects, fill: 0x000000 })),
+      // the same words may also hide in annotations, form values, bookmarks and metadata
+      ...usedTerms.map((term): EditOp => ({ type: 'scrubTerm', term })),
+    ];
     const flags = getState().saveFlags | SAVE.GC | SAVE.COMPRESS | (strip ? SAVE.STRIPMETA : 0);
     await withBusy('Redacting for real (not just a black box)…', async (ctx) => {
+      // Fail closed if the renderer and the engine disagree about where a page is: a box drawn on
+      // screen must land on exactly the same spot in the file.
+      for (const it of items) {
+        if (!(await geometryMatches(src.key, it.page, src.info.pageInfo[it.page]))) {
+          throw new Error(`Page ${it.page + 1} has unusual geometry, so I can't be sure the box lands in the right place. Nothing was changed.`);
+        }
+      }
       const res = await applyEdits(ops, flags, ctx);
+      // Two independent checks on the saved bytes: the engine's own byte-level scan, and PDF.js.
+      const v = await engine.verify(res.bytes, items, usedTerms);
+      const independent = await independentCheck(res.bytes, items, usedTerms, src.info.pages);
+      const ok = v.remaining === 0 && v.stillFound.length === 0 && !independent.underBoxes && independent.termsFound.length === 0;
+      if (!ok) {
+        undo(); // never leave a half-redacted document around to be downloaded by mistake
+        setResult({ reports: res.reports as RedactReport[], ...v, terms: usedTerms, stripped: strip, independent, reverted: true });
+        return;
+      }
       if (strip) setState({ saveFlags: getState().saveFlags | SAVE.STRIPMETA });
-      const v = await engine.verify(res.bytes, items, terms);
-      setResult({
-        reports: res.reports as RedactReport[],
-        ...v,
-        terms,
-        stripped: strip,
-      });
-      if (terms.length) record({ op: 'redactText', terms });
+      setResult({ reports: res.reports as RedactReport[], ...v, terms: usedTerms, stripped: strip, independent, reverted: false });
+      if (usedTerms.length) record({ op: 'redactText', terms: usedTerms });
       if (strip) record({ op: 'stripMetadata' });
       setBoxes({});
       setTerms([]);
@@ -141,16 +154,18 @@ export function Redact() {
     });
   };
 
-  const agg = result?.reports.reduce(
-    (a, r) => ({
-      glyphs: a.glyphs + (r?.glyphs ?? 0),
-      scrub: a.scrub + (r?.imagesScrubbed ?? 0),
-      rm: a.rm + (r?.imagesRemoved ?? 0),
-      annots: a.annots + (r?.annots ?? 0),
-    }),
-    { glyphs: 0, scrub: 0, rm: 0, annots: 0 },
-  );
-  const verified = result && result.remaining === 0 && result.stillFound.length === 0;
+  const agg = result?.reports
+    .filter((r) => r && 'glyphs' in (r as object))
+    .reduce(
+      (a, r) => ({
+        glyphs: a.glyphs + (r?.glyphs ?? 0),
+        scrub: a.scrub + (r?.imagesScrubbed ?? 0),
+        rm: a.rm + (r?.imagesRemoved ?? 0),
+        annots: a.annots + (r?.annots ?? 0),
+      }),
+      { glyphs: 0, scrub: 0, rm: 0, annots: 0 },
+    );
+  const verified = result && !result.reverted;
 
   return (
     <div class="editor">
@@ -276,59 +291,73 @@ export function Redact() {
       </aside>
       {result && agg && (
         <Dialog
-          title={verified ? 'Redaction verified ✅' : 'Redaction needs attention ⚠️'}
+          title={verified ? 'Redaction verified ✅' : 'Redaction not applied ⚠️'}
           onClose={() => setResult(null)}
           actions={
             <button class="btn primary" onClick={() => setResult(null)} autoFocus>
-              Great
+              {verified ? 'Great' : 'OK'}
             </button>
           }
         >
           <div data-testid="redaction-result">
-            <div class="check">
-              <span class={verified ? 'ok' : 'bad'}>{verified ? '✓' : '✗'}</span>
-              <div>
-                {verified ? (
-                  <>
-                    I re-opened the redacted file and extracted its text again: <b>0 characters</b> remain under the boxes
-                    {result.terms.length ? (
-                      <>
-                        , and {result.terms.map((t) => `“${t}”`).join(', ')} {result.terms.length > 1 ? 'appear' : 'appears'} <b>nowhere</b> in the document
-                      </>
-                    ) : null}
-                    .
-                  </>
-                ) : (
-                  <>
-                    {result.remaining} character(s) still found under the boxes
-                    {result.stillFound.length ? `; still present: ${result.stillFound.join(', ')}` : ''}. Leaked: “{result.leaked}”
-                  </>
+            {verified ? (
+              <>
+                <div class="check">
+                  <span class="ok">✓</span>
+                  <div>
+                    I re-opened the saved file and checked it two independent ways (the PDF engine and PDF.js): <b>no characters</b> remain under the boxes.
+                  </div>
+                </div>
+                {result.terms.length > 0 && (
+                  <div class="check">
+                    <span class="ok">✓</span>
+                    <div>
+                      {result.terms.map((t) => `“${t}”`).join(', ')} {result.terms.length > 1 ? 'were' : 'was'} not found in the page text, annotations, form
+                      fields, bookmarks, metadata or any other text in the file (searched byte by byte, including compressed data).
+                    </div>
+                  </div>
                 )}
+              </>
+            ) : (
+              <div class="check">
+                <span class="bad">✗</span>
+                <div>
+                  <b>I undid the redaction, because I couldn't prove it worked</b> — nothing was changed, so you can't accidentally share a half-redacted file.
+                  {result.remaining > 0 || result.independent.underBoxes
+                    ? ` Text still found under the boxes: “${result.leaked || result.independent.underBoxes}”.`
+                    : ''}
+                  {result.stillFound.length ? ` Still present: ${result.stillFound.join(', ')}.` : ''}
+                  {result.independent.termsFound.length ? ` PDF.js still reads: ${result.independent.termsFound.join(', ')}.` : ''} Try a larger box, or flatten
+                  the page to an image first.
+                </div>
               </div>
-            </div>
-            <ul>
-              <li>
-                <b>{agg.glyphs}</b> characters removed from the page content
-              </li>
-              {agg.scrub > 0 && (
+            )}
+            {verified && (
+              <ul>
                 <li>
-                  <b>{agg.scrub}</b> image{agg.scrub > 1 ? 's' : ''} had pixels under the boxes wiped
+                  <b>{agg.glyphs}</b> characters removed from the page content
                 </li>
-              )}
-              {agg.rm > 0 && (
-                <li>
-                  <b>{agg.rm}</b> image{agg.rm > 1 ? 's' : ''} removed entirely (couldn't be partially wiped safely)
-                </li>
-              )}
-              {agg.annots > 0 && (
-                <li>
-                  <b>{agg.annots}</b> annotation/form field
-                  {agg.annots > 1 ? 's' : ''} removed
-                </li>
-              )}
-              {result.stripped && <li>Document metadata stripped</li>}
-              <li>The file was fully rewritten — no hidden older versions remain.</li>
-            </ul>
+                {agg.scrub > 0 && (
+                  <li>
+                    <b>{agg.scrub}</b> image{agg.scrub > 1 ? 's' : ''} had pixels under the boxes wiped
+                  </li>
+                )}
+                {agg.rm > 0 && (
+                  <li>
+                    <b>{agg.rm}</b> image{agg.rm > 1 ? 's' : ''} removed entirely (couldn't be partially wiped safely)
+                  </li>
+                )}
+                {agg.annots > 0 && (
+                  <li>
+                    <b>{agg.annots}</b> annotation/form field
+                    {agg.annots > 1 ? 's' : ''} removed
+                  </li>
+                )}
+                {result.stripped && <li>Document metadata stripped</li>}
+                <li>The file was fully rewritten — no hidden older versions remain.</li>
+                <li>Images and forms shared with other pages are redacted everywhere they appear.</li>
+              </ul>
+            )}
           </div>
         </Dialog>
       )}

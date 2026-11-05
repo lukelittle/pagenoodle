@@ -73,9 +73,13 @@ class EngineClient {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       if (opts.signal?.aborted) return reject(new CancelledError());
-      this.pending.set(id, { resolve, reject, onProgress: opts.onProgress });
-      opts.signal?.addEventListener('abort', () => this.cancelAll(), {
-        once: true,
+      const onAbort = () => this.cancelAll();
+      opts.signal?.addEventListener('abort', onAbort, { once: true });
+      const done = () => opts.signal?.removeEventListener('abort', onAbort);
+      this.pending.set(id, {
+        resolve: (v) => (done(), resolve(v)),
+        reject: (e) => (done(), reject(e)),
+        onProgress: opts.onProgress,
       });
       this.worker!.postMessage({ id, method, args });
     });
@@ -97,9 +101,14 @@ class EngineClient {
   async open(key: string, bytes: Uint8Array, opts?: CallOptions): Promise<DocInfo> {
     await this.start();
     this.registry.set(key, bytes);
-    const info = (await this.raw('load', [key, bytes], opts)) as DocInfo;
-    this.loaded.add(key);
-    return info;
+    try {
+      const info = (await this.raw('load', [key, bytes], opts)) as DocInfo;
+      this.loaded.add(key);
+      return info;
+    } catch (e) {
+      this.registry.delete(key); // don't keep the bytes of a file that failed to open
+      throw e;
+    }
   }
 
   forget(key: string) {

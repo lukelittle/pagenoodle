@@ -7,6 +7,8 @@ import '../lib/guard-first';
 let sqlite3: any = null;
 let db: any = null;
 let mode: 'opfs' | 'indexeddb' | 'memory' = 'memory';
+let sahPool: any = null;
+const compact = () => db.exec('VACUUM;');
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS recipes(id INTEGER PRIMARY KEY, name TEXT NOT NULL, steps TEXT NOT NULL, created INTEGER, updated INTEGER);
@@ -47,8 +49,10 @@ async function persist() {
   await idbPut('db', bytes);
 }
 
+let baseUrl = '';
 async function init(base: string) {
   if (db) return mode;
+  baseUrl = base;
   const mod = await import(/* @vite-ignore */ new URL('vendor/sqlite/index.mjs', base).href);
   sqlite3 = await mod.default({ print: () => {}, printErr: () => {} });
   try {
@@ -56,6 +60,7 @@ async function init(base: string) {
       name: 'pagenoodle-pool',
     });
     db = new pool.OpfsSAHPoolDb('/pagenoodle.sqlite3');
+    sahPool = pool;
     mode = 'opfs';
   } catch {
     db = new sqlite3.oo1.DB(':memory:', 'c');
@@ -72,6 +77,9 @@ async function init(base: string) {
       mode = 'memory';
     }
   }
+  // Deleted rows are overwritten with zeros, and the file is compacted after deletes, so removed
+  // signatures/recipes don't linger in free pages on disk.
+  db.exec('PRAGMA secure_delete=ON;');
   db.exec(SCHEMA);
   return mode;
 }
@@ -100,6 +108,7 @@ const methods: Record<string, (...a: any[]) => unknown> = {
   },
   async deleteRecipe(id: number) {
     db.exec({ sql: 'DELETE FROM recipes WHERE id=?', bind: [id] });
+    compact();
     await persist();
   },
   listSignatures: () => rows('SELECT id, name, png, w, h, created FROM signatures ORDER BY created DESC'),
@@ -114,6 +123,7 @@ const methods: Record<string, (...a: any[]) => unknown> = {
   },
   async deleteSignature(id: number) {
     db.exec({ sql: 'DELETE FROM signatures WHERE id=?', bind: [id] });
+    compact();
     await persist();
   },
   getSetting: (key: string) => db.selectValue('SELECT value FROM settings WHERE key=?', [key]) ?? null,
@@ -125,8 +135,32 @@ const methods: Record<string, (...a: any[]) => unknown> = {
     await persist();
   },
   async wipe() {
+    // Remove the storage itself, not just the rows: close the database, delete the OPFS pool
+    // (all its files) and the IndexedDB snapshot, then start again empty.
     db.exec('DELETE FROM recipes; DELETE FROM signatures; DELETE FROM settings;');
-    await persist();
+    compact();
+    db.close();
+    db = null;
+    try {
+      if (sahPool) await sahPool.removeVfs();
+    } catch {
+      /* ignore */
+    }
+    try {
+      const root = await navigator.storage.getDirectory();
+      for await (const name of (root as unknown as { keys(): AsyncIterable<string> }).keys()) {
+        if (name.includes('pagenoodle')) await root.removeEntry(name, { recursive: true });
+      }
+    } catch {
+      /* ignore */
+    }
+    await new Promise<void>((resolve) => {
+      const r = indexedDB.deleteDatabase(IDB_NAME);
+      r.onsuccess = r.onerror = r.onblocked = () => resolve();
+    });
+    sahPool = null;
+    mode = 'memory';
+    await init(baseUrl);
   },
 };
 

@@ -189,12 +189,16 @@ async function applyOps(h: number, ops: EditOp[], dropUndecodable: boolean) {
       }
       case 'redact': {
         const flat = op.rects.flat();
-        withDoubles(flat, (p) => M._nd_redact(h, op.page, p, op.rects.length, op.fill));
+        const rc = withDoubles(flat, (p) => M._nd_redact(h, op.page, p, op.rects.length, op.fill));
         const rep = JSON.parse(outStr()) as RedactReport;
+        if (rc !== 0 || !rep.ok) throw new Error(`Redaction failed on page ${op.page + 1} — nothing was saved.`);
         rep.needRaster?.forEach((n) => needRaster.add(n));
         reports.push(rep);
         break;
       }
+      case 'scrubTerm':
+        reports.push({ scrubbed: withStr(op.term, (p) => M._nd_scrub_term(h, p)) });
+        break;
       case 'formSet':
         if (withStr(op.value, (p) => M._nd_form_set(h, op.id, p)) !== 0) throw new Error(lastError());
         reports.push(null);
@@ -370,9 +374,14 @@ const methods: Record<string, (...args: any[]) => unknown> = {
         remaining += withDoubles(it.rects.flat(), (p) => M._nd_verify(h, it.page, p, it.rects.length));
         leaked += JSON.parse(outStr()).leaked;
       }
+      // byte-level scan of the whole file: page text, every string object, every decoded stream
       const stillFound: string[] = [];
       for (const t of terms) {
-        if (withStr(t, (p) => M._nd_search(h, p, 1)) > 0) stillFound.push(t);
+        if (withStr(t, (p) => M._nd_scan_term(h, p)) > 0) {
+          const where = JSON.parse(outStr()) as { text: number; strings: number; streams: number };
+          const parts = [where.text && 'page text', where.strings && 'annotations/fields/metadata', where.streams && 'embedded data'].filter(Boolean);
+          stillFound.push(`${t} (${parts.join(', ')})`);
+        }
       }
       return { remaining, leaked, stillFound };
     } finally {

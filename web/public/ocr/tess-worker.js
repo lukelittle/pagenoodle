@@ -26,6 +26,8 @@
     for (var i = 0; i < arguments.length; i++) if (!same(arguments[i])) throw new TypeError('Pagenoodle privacy guard blocked ' + arguments[i]);
     return imp.apply(self, arguments);
   };
-  self.WebSocket = function () { throw new TypeError('Pagenoodle privacy guard blocked WebSocket'); };
+  ['WebSocket', 'EventSource', 'WebTransport', 'RTCPeerConnection', 'fetchLater'].forEach(function (n) {
+    if (n in self) self[n] = function () { throw new TypeError('Pagenoodle privacy guard blocked ' + n); };
+  });
 })();
 importScripts('../vendor/tesseract/worker.min.js');

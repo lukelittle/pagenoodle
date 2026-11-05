@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dirent.h>
 
 static int g_fail = 0, g_pass = 0;
 static const char *g_dir;
@@ -383,9 +384,14 @@ static void test_fuzz_regressions(void) {
     puts("fuzzer regressions");
     char dir[1024];
     snprintf(dir, sizeof dir, "%s/../fuzz-regressions", g_dir);
-    const char *names[] = {"crash-1bd17bc9bcede4a44b42fd9c1f6f9f1bc536daa8", "crash-2e6ed789f6a9433f78fb64e6f6fbc2e3d46c0d2c",
-                           "crash-4a6c2e6b798718099afc4b315a587ec686206bef", "crash-d53353ef1bf7df3782d92f9a2d16b52e3199eaf1"};
-    for (int i = 0; i < 4; i++) {
+    DIR *dd = opendir(dir);
+    char names[64][128];
+    int nn = 0;
+    for (struct dirent *e; dd && (e = readdir(dd)) && nn < 64;)
+        if (e->d_name[0] != '.') snprintf(names[nn++], sizeof names[0], "%s", e->d_name);
+    if (dd) closedir(dd);
+    CHECK(nn >= 5, "fuzz regression corpus present (%d files)", nn);
+    for (int i = 0; i < nn; i++) {
         char path[1200];
         snprintf(path, sizeof path, "%s/%s", dir, names[i]);
         FILE *f = fopen(path, "rb");

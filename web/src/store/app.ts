@@ -101,6 +101,11 @@ export async function withBusy<T>(
   label: string,
   fn: (ctx: { onProgress: (d: number, t: number) => void; signal: AbortSignal }) => Promise<T>,
 ): Promise<T | undefined> {
+  if (state.busy) {
+    // one operation at a time: concurrent edits could silently overwrite each other
+    toast('Hang on — still working on the last thing.');
+    return undefined;
+  }
   abort = new AbortController();
   const signal = abort.signal;
   setState({ busy: { label, done: 0, total: 0 } });
@@ -131,7 +136,13 @@ export function cancelBusy() {
 async function registerSource(name: string, bytes: Uint8Array): Promise<Source> {
   const key = newId('s');
   const info = await engine.open(key, bytes);
-  await loadPdf(key, bytes);
+  try {
+    await loadPdf(key, bytes);
+  } catch (e) {
+    engine.forget(key);
+    unloadPdf(key);
+    throw e;
+  }
   return { key, name, bytes, info };
 }
 

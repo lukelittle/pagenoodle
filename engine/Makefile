@@ -45,7 +45,7 @@ wasm:
 	  -o $(WASM_OUT)/noodle.mjs
 
 clean:
-	rm -rf build build-asan build-wasm
+	rm -rf build build-asan build-wasm build-fuzz
 
 .PHONY: all test asan wasm clean
 
@@ -58,3 +58,14 @@ wasm-test:
 	$(NODE) build-wasm/test_engine.js tests/fixtures
 
 .PHONY: wasm-test
+
+# Coverage-guided fuzzing (clang + compiler-rt). Corpus defaults to the test fixtures.
+FUZZ_SECONDS ?= 600
+fuzz:
+	@mkdir -p build-fuzz/corpus && cp tests/fixtures/*.pdf tests/fuzz-regressions/* tests/security/*.pdf build-fuzz/corpus/
+	clang -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined -Iinclude -Isrc -Ivendor/miniz \
+	  -DMINIZ_NO_STDIO -DMINIZ_NO_ARCHIVE_APIS -DMINIZ_NO_TIME -DMINIZ_NO_ZLIB_COMPATIBLE_NAMES \
+	  $(SRC) fuzz/fuzz_engine.c -lm -o build-fuzz/fuzz_engine
+	cd build-fuzz && ./fuzz_engine -max_total_time=$(FUZZ_SECONDS) -max_len=200000 -timeout=10 -rss_limit_mb=3000 corpus
+
+.PHONY: fuzz

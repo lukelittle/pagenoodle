@@ -29,7 +29,15 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('message', (event) => {
-  if (event.data === 'skipWaiting') self.skipWaiting();
+  if (event.data === 'skipWaiting') {
+    // Only switch versions when a single tab is open: another tab may still be running the old
+    // build and need its old files (e.g. to restart a worker after Cancel).
+    event.waitUntil(
+      self.clients.matchAll({ type: 'window' }).then((tabs) => {
+        if (tabs.length <= 1) return self.skipWaiting();
+      }),
+    );
+  }
   if (event.data === 'status') {
     event.source?.postMessage({ type: 'sw-status', version: VERSION, files: PRECACHE.length });
   }

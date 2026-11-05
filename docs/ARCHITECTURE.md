@@ -58,26 +58,48 @@ image codecs). Pagenoodle uses **PDF.js** (Apache-2.0) only to *draw* pages; eve
 
 For each page and each redaction rectangle (in PDF user space):
 
-1. The page's content stream is interpreted with full graphics/text state. Every glyph's box is
-   computed in user space (`Trm × CTM`). Glyphs whose centre lies in a box or which overlap it by
-   ≥ 10 % are **deleted from the content stream**; `Tj`/`'`/`"` are rewritten to `TJ` with numeric
-   offsets so the remaining text keeps its exact position. Invisible text (render mode 3, e.g. OCR
-   layers) is removed too.
-2. **Images** under a box have their **pixels overwritten** (any bit depth/colour space the engine
-   can decode). JPEGs are first decoded to pixels by the worker and re-inserted losslessly so they
-   can be scrubbed. Images that cannot be decoded safely (JPEG 2000, JBIG2, CCITT) are **removed
-   entirely**. Inline images under a box are removed.
-3. **Form XObjects** under a box are recursively redacted into new private copies.
-4. **Annotations** under a box are removed; form widgets also lose their field values.
-5. A black box is drawn on top, the file is **fully rewritten with garbage collection** (so the old
-   content streams and images are gone — no incremental-update leftovers), and metadata can be
-   stripped.
-6. **Verification**: the saved bytes are re-opened, text is extracted again, and Pagenoodle checks
-   that zero glyphs remain under any box and that searched terms appear nowhere in the document.
-   The C test-suite additionally checks that the secret is absent from every decompressed stream.
+1. **Geometry check.** Page size, crop box (clipped to the media box) and `/Rotate` are computed exactly as
+   PDF.js does. Before anything is changed, the UI confirms that the renderer and the engine agree on where
+   the page is; if they don't, it refuses (a box must land where the user drew it).
+2. **Text.** The content stream is interpreted with full graphics/text state (growable `q`/`Q` stack,
+   horizontal and vertical writing, `Tz`/`Tc`/`Tw`/`Ts`). Glyphs whose centre lies in a box, or which overlap
+   it by ≥ 10 %, are **deleted from the content stream**; `Tj`/`'`/`"` are rewritten as `TJ` with offsets so
+   remaining text keeps its exact position. Invisible (`Tr 3`, OCR) and zero-size text is removed too.
+   `/ActualText` and `/Alt` in marked content are dropped on redacted pages.
+3. **Images** under a box have their **pixels overwritten**, along with their soft masks; `/Alternates`,
+   `/OPI` etc. are dropped. JPEGs are decoded by the worker and re-inserted losslessly so they can be scrubbed.
+   Images that cannot be decoded safely (JPEG 2000, JBIG2, CCITT) are **removed entirely**.
+4. **Shared objects are redacted in place.** A form XObject or image used on several pages (or referenced
+   from the structure tree, an annotation appearance, …) is replaced *itself*, so no original copy can survive
+   in the file. The redacted area is therefore removed everywhere that object appears.
+5. **Fail closed.** Content too deeply nested to analyse, undecodable forms, and tiling patterns that draw
+   text on a redacted page are emptied rather than passed through.
+6. **Annotations** under a box are removed together with their popups and content-bearing keys; form widgets
+   lose their values. Page `/PieceInfo`, `/Thumb`, `/Metadata` and the form's XFA copy are removed.
+7. **Find & redact** additionally scrubs the term from annotations, form values, bookmarks, document info
+   and any other string in the file.
+8. The file is **fully rewritten with garbage collection** (no incremental-update leftovers), and metadata can
+   be stripped.
+9. **Two independent verifications** of the saved bytes: (a) the engine re-extracts text under every box and
+   scans every string and every decompressed stream for the searched terms; (b) PDF.js — a different parser —
+   extracts the text again. If *either* finds anything, the redaction is **undone** and the user is told, so a
+   half-redacted file can never be downloaded by mistake.
 
-Known gaps (shown in the docs): vector paths under a box are covered, not deleted; text drawn as
-vector outlines or inside images is only affected via the image path.
+Known gaps: vector paths under a box are covered, not deleted; text drawn as outlines or inside undecodable
+images is handled only via the image rules; structure-tree `/Alt` text is only scrubbed for searched terms.
+
+## Security hardening
+
+The engine parses untrusted files inside the browser, so it is built defensively and tested adversarially:
+
+- **Fuzzing**: `engine/fuzz/fuzz_engine.c` is a libFuzzer harness exercising open, text, search, redaction,
+  overlays, stamps, assembly and save (with ASan + UBSan). Every crash found is kept in
+  `engine/tests/fuzz-regressions/` and replayed by the test-suite.
+- **Security review proofs-of-concept** live in `engine/tests/security/` and are asserted by the test-suite
+  (no crash/hang, and no redacted secret survives).
+- **Limits**: object nesting (64), decompressed stream size (512 MB), image dimensions (65 536 px), CID width
+  entries, load recursion (32); page/field trees and object streams are visited once; the WASM build aborts
+  on allocation failure instead of writing through a null pointer.
 
 ## Data flow for edits
 
@@ -101,6 +123,11 @@ the worker, and a fresh one transparently re-loads the documents it needs.
    important because a `<meta>` CSP does not apply to dedicated workers.
 4. All third-party runtime assets (PDF.js worker/fonts, SQLite, Tesseract core + model) are
    **vendored and served from the same origin**; none of their CDN defaults are used.
+
+**Use a dedicated origin.** Pages served from `https://<user>.github.io/<repo>/` share an origin with every
+other GitHub Pages site of that user — they could read Pagenoodle's local storage (saved signatures). Deploy at a
+custom domain (or a user/org with no other Pages sites). The app also refuses to run inside a frame
+(clickjacking), since a `<meta>` CSP cannot set `frame-ancestors`.
 
 If you self-host on a server that can send headers, also send the CSP as an HTTP header (see the
 README) so workers are covered by the browser as well.

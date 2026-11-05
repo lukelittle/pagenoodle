@@ -20,7 +20,9 @@ static unsigned char *inflate_impl(const unsigned char *in, size_t inlen, size_t
         inpos += in_bytes; len += out_bytes;
         if (st == TINFL_STATUS_DONE) { *ok = 1; break; }
         if (st == TINFL_STATUS_HAS_MORE_OUTPUT) {
-            if (cap >= PN_MAX_STREAM) break; /* decompression bomb: keep what we have */
+            /* Deflate cannot expand more than ~1032:1; anything beyond that is miniz synthesising
+             * data from zero padding after the input ran out (an unbounded "bomb"). */
+            if (cap >= PN_MAX_STREAM || (uint64_t)cap > (uint64_t)inlen * 1040u + 65536u) break;
             cap *= 2; out = (unsigned char *)realloc(out, cap + 1); continue;
         }
         if (st == TINFL_STATUS_NEEDS_MORE_INPUT) {
