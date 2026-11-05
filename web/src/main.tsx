@@ -2,6 +2,8 @@ import './lib/guard-first';
 
 import { render } from 'preact';
 import '@fontsource/caveat/400.css';
+import '@fontsource/fraunces/latin-600.css';
+import '@fontsource/fraunces/latin-700.css';
 import './styles.css';
 import { App } from './components/App';
 import { getState } from './store/app';

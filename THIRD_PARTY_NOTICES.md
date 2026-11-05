@@ -18,6 +18,7 @@ No component is copyleft (no GPL/AGPL), so Pagenoodle can be freely forked, host
 | **eng.traineddata** (`@tesseract.js-data/eng`, from tesseract-ocr/tessdata) | English OCR model | Apache-2.0 (model), MIT (npm packaging) | yes |
 | **Preact** | UI library | MIT | yes |
 | **Caveat** font (`@fontsource/caveat`, Pablo Impallari) | Handwriting style for typed signatures | SIL Open Font License 1.1 | yes |
+| **Fraunces** font (`@fontsource/fraunces`, Undercase Type) | Retro display headings | SIL Open Font License 1.1 | yes |
 | ReportLab, fontTools | Dev-time only: generating metric tables and test fixtures | BSD | no |
 | Vite, TypeScript, Playwright | Dev-time build & test tooling | MIT / Apache-2.0 | no |
 | axe-core (`@axe-core/playwright`) | Dev-time accessibility tests | MPL-2.0 | no |
