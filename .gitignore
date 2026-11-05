@@ -1,0 +1,10 @@
+node_modules/
+dist/
+engine/build/
+engine/build-asan/
+web/public/engine/
+web/public/vendor/
+web/test-results/
+web/playwright-report/
+*.log
+.DS_Store
